@@ -13,6 +13,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { ArrowUp, Check, Circle, Film, LoaderCircle, PanelRightClose, RefreshCw, Sparkles } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import type { AgentWorkflowState, CanvasNode, GenerateVideoPromptResult, VideoJob } from "@shared/contracts";
+import { isTerminalVideoTaskState } from "@shared/video-task-states";
 import { useUiStore } from "../store/ui-store";
 import { Button } from "./ui/button";
 
@@ -245,7 +246,7 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
   }, [workflowState?.creative?.nodeId]);
 
   useEffect(() => {
-    if (!videoJob || ["completed", "failed", "canceled", "expired"].includes(videoJob.state)) return;
+    if (!videoJob || isTerminalVideoTaskState(videoJob.state)) return;
     const timer = window.setInterval(() => {
       void window.agentApp.video.getJob(videoJob.id)
         .then(setVideoJob)

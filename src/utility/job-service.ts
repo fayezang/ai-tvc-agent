@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import type { VideoGenerationRequest, VideoJob, VideoTaskState } from "../shared/contracts.js";
+import { isTerminalVideoTaskState } from "../shared/video-task-states.js";
 import { OrzClient, type OrzTaskResponse } from "./providers/orz-client.js";
 import { resolveOrzAdapter } from "./providers/orz-adapters.js";
 import { persistVideoOutputs } from "./video-assets.js";
@@ -28,8 +29,8 @@ const mapProviderState = (status: OrzTaskResponse["status"]): VideoTaskState => 
   return status;
 };
 
-/** 已到达终态、不应再向 ORZ 轮询的状态。 */
-const TERMINAL_STATES: readonly VideoTaskState[] = ["completed", "failed", "canceled", "expired"];
+/** 终态判断来自 shared/video-task-states.ts，本文件不再自持一份清单。 */
+const isTerminal = isTerminalVideoTaskState;
 
 const parseStringArray = (raw: string | null): string[] => {
   if (!raw) return [];
@@ -96,7 +97,7 @@ export class JobService {
   async refresh(projectRoot: string, jobId: string, apiKey: string): Promise<VideoJob> {
     const row = this.getRow(projectRoot, jobId);
     if (!row.provider_task_id) return rowToJob(row);
-    if (TERMINAL_STATES.includes(row.state)) return rowToJob(row);
+    if (isTerminal(row.state)) return rowToJob(row);
     try {
       const task = await new OrzClient(apiKey).getTask(row.provider_task_id);
       return await this.updateFromProvider(projectRoot, jobId, task);

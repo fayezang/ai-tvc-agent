@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { VIDEO_TASK_STATES } from "./video-task-states.js";
 
 export const AdDurationSchema = Schema.Literal(5, 8, 10, 15);
 export type AdDuration = typeof AdDurationSchema.Type;
@@ -163,19 +164,11 @@ export const ProviderValidationSchema = Schema.Struct({
   message: Schema.String
 });
 export type ProviderValidation = typeof ProviderValidationSchema.Type;
-export const VideoTaskStateSchema = Schema.Literal(
-  "draft",
-  "awaiting-approval",
-  "uploading",
-  "queued",
-  "generating",
-  "downloading",
-  "validating",
-  "completed",
-  "failed",
-  "canceled",
-  "expired"
-);
+/**
+ * 状态清单来自 shared/video-task-states.ts，此处只把它抬升为 Schema。
+ * 不要在这里重新罗列字面量——那会让 Schema 与运行时判断函数各自演化。
+ */
+export const VideoTaskStateSchema = Schema.Literal(...VIDEO_TASK_STATES);
 export type VideoTaskState = typeof VideoTaskStateSchema.Type;
 
 export const VideoGenerationRequestSchema = Schema.Struct({
