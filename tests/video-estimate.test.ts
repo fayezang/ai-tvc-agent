@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import type { VideoGenerationRequest } from "../src/shared/contracts.js";
-import { ORZ_MODELS } from "../src/shared/orz-models.js";
-import { PRICING_FETCHED_AT } from "../src/shared/orz-pricing.js";
+import { MODEL_DEFINITIONS, ORZ_MODELS } from "../src/shared/orz-models.js";
+import { PRICING_FETCHED_AT, pricedResolutions } from "../src/shared/orz-pricing.js";
 import { estimateVideoCost, normalizeVideoParams } from "../src/shared/video-estimate.js";
 
 const request = (overrides: Partial<VideoGenerationRequest>): VideoGenerationRequest => ({
@@ -51,18 +51,18 @@ describe("video cost estimation", () => {
     expect(listPrice.amount).toBe(32.4);
   });
 
-  test("bills Veo for the full eight seconds it always generates", () => {
+  test("bills the seconds the model generates, not the seconds the script wants", () => {
     // 本批最容易被漏掉、也最伤用户信任的一条：
-    // 脚本要 5 秒，Veo 固定输出 8 秒，ORZ 按 8 秒计费。
-    // 若按脚本时长报价，用户以为付 ¥103.68，实际付 ¥165.89。
+    // 脚本要 7 秒，Kling 只有 5 / 10 两档，取 10 秒生成再裁剪，而 ORZ 按 10 秒计费。
+    // 若按脚本时长报价，用户以为付 ¥14.63，实际付 ¥20.9。
     const estimate = estimateVideoCost(
-      request({ modelId: ORZ_MODELS.veo, duration: 5, resolution: "720p" })
+      request({ modelId: ORZ_MODELS.kling, duration: 7, resolution: "720p" })
     );
-    expect(estimate.requestedSeconds).toBe(5);
-    expect(estimate.billedSeconds).toBe(8);
-    expect(estimate.amount).toBe(165.89);
-    expect(estimate.adjustments.join(" ")).toContain("计费按 8 秒计");
-    expect(estimate.adjustments.join(" ")).toContain("裁剪至脚本要求的 5 秒");
+    expect(estimate.requestedSeconds).toBe(7);
+    expect(estimate.billedSeconds).toBe(10);
+    expect(estimate.amount).toBe(20.9);
+    expect(estimate.adjustments.join(" ")).toContain("计费按 10 秒计");
+    expect(estimate.adjustments.join(" ")).toContain("裁剪至脚本要求的 7 秒");
   });
 
   test("picks the smallest tier that still covers the shot", () => {
@@ -168,24 +168,32 @@ describe("video cost estimation", () => {
     expect(estimate.adjustments.join(" ")).toContain("折扣价未收录");
   });
 
-  test("returns a null amount when the resolution has no published price", () => {
-    // Veo 接受 480p 入参但 ORZ 未对该档报价。规范化不会改它的分辨率
-    // （模型确实支持），因此这里必须靠价格表返回 null。
+  test("downgrades rather than quoting a tier ORZ has no price for", () => {
+    // Kling 不支持 480p，规范化会把它降到 1080p，因此估价拿得到真实金额。
+    // 这条同时守住一个不变量：当前模型集合里，凡是模型接受的分辨率
+    // ORZ 都有报价。将来若加入「能接受但无报价」的模型，
+    // normalizeVideoParams 不会改它的分辨率，金额就会变成 null —— 那时
+    // 确认面板必须能显示「无法估算」，本条会先在这里失败提醒。
     const estimate = estimateVideoCost(
-      request({ modelId: ORZ_MODELS.veo, duration: 8, resolution: "480p" })
+      request({ modelId: ORZ_MODELS.kling, duration: 10, resolution: "480p" })
     );
-    expect(estimate.amount).toBeNull();
-    expect(estimate.amountPerSecond).toBeNull();
-    expect(estimate.note).toContain("未对该档报价");
-    // 秒数仍然要如实报告 —— 金额未知不代表时长未知。
-    expect(estimate.billedSeconds).toBe(8);
+    expect(estimate.adjustments.join(" ")).toContain("不支持 480p");
+    expect(estimate.amount).not.toBeNull();
+
+    for (const model of MODEL_DEFINITIONS.filter((entry) => entry.media === "video")) {
+      expect([...pricedResolutions(model.id)].sort()).toEqual([...model.resolutions].sort());
+    }
   });
 
   test("never throws on an unregistered model", () => {
     // 估价环节崩掉会挡住整个确认流程，比给不出金额严重得多。
-    const estimate = estimateVideoCost(request({ modelId: "minimax/hailuo-2-3" }));
-    expect(estimate.amount).toBeNull();
-    expect(estimate.adjustments.join(" ")).toContain("未注册");
+    // 已下架的 Hailuo 与 Veo 都走这条路径。
+    for (const retired of ["minimax/hailuo-2-3", "google/veo-3-1"]) {
+      const estimate = estimateVideoCost(request({ modelId: retired }));
+      expect(estimate.amount).toBeNull();
+      expect(estimate.amountPerSecond).toBeNull();
+      expect(estimate.adjustments.join(" ")).toContain("未注册");
+    }
   });
 
   test("submits exactly the parameters it quoted", () => {

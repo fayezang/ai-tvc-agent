@@ -10,7 +10,7 @@
  *    近似出来的金额会让用户按错误的数字做决策，比不给金额更糟。
  *
  * 2. **参考图折扣只按规范明确给出的数字生效。** 规范在 Seedance 上给了三档折扣价
- *    （由此算得约便宜 40%），但 Kling 与 Veo 没有给。40% 是 Seedance 的实测结果，
+ *    （由此算得约便宜 40%），但 Kling 没有给。40% 是 Seedance 的实测结果，
  *    不是 ORZ 的通用系数，不能外推到别的模型。
  *
  * 价格随时可能变动，任何展示金额的界面都必须同时展示 PRICING_FETCHED_AT，
@@ -50,9 +50,10 @@ interface ModelPricing {
 }
 
 /**
- * Veo 3.1 的特殊之处：它**接受** 480p 入参（见 MODEL_DEFINITIONS.resolutions），
- * 但 ORZ 只对 720p 与 1080p 报价，且两档同价。能力档与价格档必须分别建模，
- * 否则查表会误以为「支持该分辨率 ⇒ 一定有报价」。
+ * Kling 的特殊之处：ORZ 只对 720p 与 1080p 报价，没有 480p 档。
+ *
+ * 模型能接受哪些入参、与 ORZ 对哪些档报价，是两件独立的事，必须分别建模。
+ * 否则查表会误以为「模型支持该分辨率 ⇒ 一定查得到价」。
  */
 const PRICING: readonly ModelPricing[] = [
   {
@@ -71,14 +72,6 @@ const PRICING: readonly ModelPricing[] = [
       "1080p": { list: 3.46, withReference: null }
     },
     missingReason: "Kling 2.5-turbo 无 480p 档位"
-  },
-  {
-    modelId: ORZ_MODELS.veo,
-    perSecond: {
-      "720p": { list: 20.736, withReference: null },
-      "1080p": { list: 20.736, withReference: null }
-    },
-    missingReason: "Veo 3.1 接受 480p 入参但 ORZ 未对该档报价"
   }
 ];
 
@@ -94,7 +87,7 @@ export interface PriceLookup {
   /**
    * 该模型带参考图时是否可能比返回值更便宜。
    *
-   * Kling 与 Veo 的折扣价规范未收录，此时返回原价并置本标志，
+   * Kling 的折扣价规范未收录，此时返回原价并置本标志，
    * 确认面板据此提示「实际可能更低」，而不是让用户以为原价就是终价。
    */
   readonly referenceDiscountUnknown: boolean;

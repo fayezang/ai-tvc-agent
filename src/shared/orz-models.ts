@@ -12,7 +12,6 @@ export const ORZ_MODELS = {
   geminiFlashLite: "google/gemini-3-1-flash-lite",
   geminiFlash: "google/gemini-2-5-flash",
   kling: "kuaishou/kling-2-5-turbo",
-  veo: "google/veo-3-1",
   seedance: "bytedance/seedance-2",
   storyboard: "google/gemini-image-3-1",
   gptImageLow: "openai/gpt-image-2-low",
@@ -103,15 +102,6 @@ export const MODEL_DEFINITIONS: readonly ModelDefinition[] = [
     aspectRatios: ["16:9", "9:16", "1:1"]
   },
   {
-    id: ORZ_MODELS.veo,
-    name: "Google Veo 3.1",
-    provider: "ORZ",
-    media: "video",
-    durations: [8],
-    resolutions: ["480p", "720p", "1080p"],
-    aspectRatios: ["16:9", "9:16", "1:1", "21:9", "4:3", "3:4"]
-  },
-  {
     id: ORZ_MODELS.seedance,
     name: "Seedance 2",
     provider: "ORZ",
@@ -139,7 +129,5 @@ export const VIDEO_MODEL_OPTIONS: readonly OrzModelOption[] = MODEL_DEFINITIONS
     description:
       model.id === ORZ_MODELS.kling
         ? "动作与快速运镜 · 5/10 秒"
-        : model.id === ORZ_MODELS.veo
-          ? "写实产品展示 · 成本较高"
-          : "低成本测试默认 · 4–15 秒"
+        : "低成本测试默认 · 4–15 秒"
   }));

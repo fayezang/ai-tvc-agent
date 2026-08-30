@@ -260,7 +260,8 @@ export class JobService {
 
     for (const current of billedRows) {
       // 计费秒数优先取快照的 billed_seconds：模型只有离散时长档时，
-      // 实际生成（并计费）的秒数大于脚本时长。Veo 固定 8 秒而脚本要 5 秒，
+      // 实际生成（并计费）的秒数大于脚本时长。Kling 只有 5 / 10 两档，
+      // 脚本要 7 秒时按 request.duration 汇总会少算 3 秒。
       // 按 request.duration 汇总会少算 3 秒。
       if (typeof current.billed_seconds === "number") {
         totalBilledSeconds += current.billed_seconds;

@@ -262,7 +262,7 @@ export const VideoEstimateSchema = Schema.Struct({
   /**
    * 实际计费秒数。与 requestedSeconds 可能不同：模型只有离散时长档时，
    * 系统生成更长素材再裁剪，而 ORZ 按生成时长计费。
-   * Veo 3.1 固定 8 秒，脚本要 5 秒时这里是 8。
+   * Kling 只有 5 / 10 两档，脚本要 7 秒时这里是 10。
    */
   billedSeconds: Schema.Number,
   /** 脚本要求的镜头时长。billedSeconds 大于它时说明发生了向上取整。 */

@@ -334,10 +334,15 @@ describe("chain cost accounting", () => {
       const orz = serveOrz(() => "completed");
       try {
         const jobs = service(orz.baseUrl);
-        // Veo 固定输出 8 秒。脚本只要 5 秒，但 ORZ 按 8 秒计费。
-        // 按 request.duration 汇总会少算 3 秒、少算 ¥62.21。
+        // Kling 只有 5 / 10 两档。脚本要 7 秒 → 生成 10 秒再裁，ORZ 按 10 秒计费。
+        // 按 request.duration 汇总会少算 3 秒、少算 ¥6.27。
         await jobs.submit(
-          { ...request(projectRoot), modelId: "google/veo-3-1", duration: 5, resolution: "720p" },
+          {
+            ...request(projectRoot),
+            modelId: "kuaishou/kling-2-5-turbo",
+            duration: 7,
+            resolution: "720p"
+          },
           "key"
         );
         const rows = new Database(join(projectRoot, ".agent", "index.sqlite"));
@@ -345,8 +350,8 @@ describe("chain cost accounting", () => {
         rows.close();
 
         const chain = jobs.chain(projectRoot, only.id);
-        expect(chain.totalBilledSeconds).toBe(8);
-        expect(chain.totalCost).toBe(165.89);
+        expect(chain.totalBilledSeconds).toBe(10);
+        expect(chain.totalCost).toBe(20.9);
       } finally {
         orz.stop();
       }

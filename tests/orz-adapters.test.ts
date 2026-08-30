@@ -84,24 +84,26 @@ describe("ORZ Provider Adapter Registry", () => {
     expect(SHOT_ROLE_MODEL.other).toBe(ORZ_MODELS.seedance);
     expect(registeredVideoModelIds()).toEqual([
       ORZ_MODELS.kling,
-      ORZ_MODELS.veo,
       ORZ_MODELS.seedance
     ]);
   });
 
-  test("no longer ships Hailuo 2.3 in any layer", () => {
-    // 该模型报价为 ¥36/s，任意分辨率同价，5 秒即 ¥180——比 Seedance 1080p 贵约 7 倍。
-    // 产品定位为低成本试验，不发布它，也就不必把这个可疑数量级带进价格表。
-    expect(registeredVideoModelIds()).not.toContain("minimax/hailuo-2-3");
-    expect(MODEL_DEFINITIONS.some((model) => model.id === "minimax/hailuo-2-3")).toBe(false);
-    expect(() => resolveOrzAdapter("minimax/hailuo-2-3")).toThrow("未注册模型");
+  test("no longer ships the models we decided not to publish", () => {
+    // Hailuo 2.3：¥36/s 且任意分辨率同价，5 秒即 ¥180，比 Seedance 1080p 贵约 7 倍。
+    // Veo 3.1：¥20.736/s，固定 8 秒即 ¥165.89，且时长无法匹配任意脚本镜头。
+    // 本产品定位低成本试验，两者都不发布，也就不必把这些数量级带进价格表。
+    for (const retired of ["minimax/hailuo-2-3", "google/veo-3-1"]) {
+      expect(registeredVideoModelIds()).not.toContain(retired);
+      expect(MODEL_DEFINITIONS.some((model) => model.id === retired)).toBe(false);
+      expect(() => resolveOrzAdapter(retired)).toThrow("未注册模型");
+    }
   });
 
   test("uses the saved video routing instead of a per-request model ID", () => {
     const routing = {
       hook: ORZ_MODELS.seedance,
       reveal: ORZ_MODELS.kling,
-      proof: ORZ_MODELS.veo,
+      proof: ORZ_MODELS.seedance,
       cta: ORZ_MODELS.kling
     };
     expect(resolveVideoModelForRole("hook", routing)).toBe(ORZ_MODELS.seedance);
@@ -132,27 +134,23 @@ describe("ORZ Provider Adapter Registry", () => {
     });
   });
 
-  test("builds Kling and Veo with their own REST shapes", () => {
+  test("builds Kling with its own REST shape", () => {
     const kling = resolveOrzAdapter(ORZ_MODELS.kling).build(
       request({ modelId: ORZ_MODELS.kling, role: "hook", duration: 5, resolution: "720p" })
     );
     expect(kling.input.version).toBe("2.5-turbo");
     expect(kling.input.resolution).toBe("720P");
-
-    const veo = resolveOrzAdapter(ORZ_MODELS.veo).build(
-      request({ modelId: ORZ_MODELS.veo, role: "reveal", duration: 8, fps: 30 })
-    );
-    expect(veo.input.version).toBe("3.1");
-    expect(veo.input.duration).toBe(8);
-    expect(veo.input.fps).toBe(30);
+    expect(kling.input.duration).toBe(5);
   });
 
   test("rejects durations unsupported by a concrete provider", () => {
+    // Kling 只有 5 与 10 两档。7 秒不在其中，Adapter 必须拒掉而不是静默取整——
+    // 取整属于 normalizeVideoParams 的职责，且必须在报价时就发生。
     expect(() =>
-      resolveOrzAdapter(ORZ_MODELS.veo).build(
-        request({ modelId: ORZ_MODELS.veo, role: "reveal", duration: 5 })
+      resolveOrzAdapter(ORZ_MODELS.kling).build(
+        request({ modelId: ORZ_MODELS.kling, role: "reveal", duration: 7, resolution: "720p" })
       )
-    ).toThrow("不支持 5 秒时长");
+    ).toThrow("不支持 7 秒时长");
   });
 
   test("builds each static storyboard shot for Gemini Image 3.1 through ORZ", () => {
