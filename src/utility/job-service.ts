@@ -326,13 +326,7 @@ export class JobService {
    * 花了多少时间。删掉或改写它等于抹掉用户已经付过的那次成本。
    * 新 job 通过 parent_job_id / root_job_id 挂到同一条链上。
    */
-  retry(projectRoot: string, jobId: string): VideoPreparation;
-  /**
-   * @deprecated 仅供第二批遗留的内部调用兼容；Renderer/IPC 不得传 apiKey。
-   * 有 apiKey 时立即 approve 的旧行为只保留到相关测试迁移完成。
-   */
-  retry(projectRoot: string, jobId: string, apiKey: string): Promise<VideoJob>;
-  retry(projectRoot: string, jobId: string, apiKey?: string): VideoPreparation | Promise<VideoJob> {
+  retry(projectRoot: string, jobId: string): VideoPreparation {
     const row = this.getRow(projectRoot, jobId);
     const request = JSON.parse(row.request_json) as VideoGenerationRequest;
     const rootJobId = row.root_job_id ?? row.id;
@@ -340,14 +334,11 @@ export class JobService {
     // 用户可能从链中任意一次失败的尝试发起重试，若按父任务递增会产生重号。
     // maxAttempt 统计包含 awaiting-approval 的行，因此连开两个待确认重试
     // 也不会撞号。
-    const preparation = this.prepare(request, {
+    return this.prepare(request, {
       parentJobId: row.id,
       rootJobId,
       attempt: this.maxAttempt(projectRoot, rootJobId) + 1
     });
-    // 正式 UI 与 IPC 不会传 apiKey，永远返回 awaiting-approval。
-    // 这一分支仅让第二批的直接服务调用保持兼容，待测试迁移后删除。
-    return apiKey ? this.approve(projectRoot, preparation.job.id, apiKey) : preparation;
   }
 
   /**
