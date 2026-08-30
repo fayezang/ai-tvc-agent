@@ -395,7 +395,13 @@ export const AgentUiEventSchema = Schema.Union(
   }),
   Schema.Struct({ type: Schema.Literal("project-changed"), requestId: Schema.String }),
   Schema.Struct({ type: Schema.Literal("agent-end"), requestId: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("agent-error"), requestId: Schema.String, message: Schema.String })
+  Schema.Struct({ type: Schema.Literal("agent-error"), requestId: Schema.String, message: Schema.String }),
+  /**
+   * 视频任务状态推送。由 Utility Process 的轮询器与启动恢复主动发出，
+   * 因此没有 requestId——它不属于任何一次用户发起的请求。
+   * preload 的类型守卫据此对本成员豁免 requestId 检查。
+   */
+  Schema.Struct({ type: Schema.Literal("video-job"), job: VideoJobSchema })
 );
 export type AgentUiEvent = typeof AgentUiEventSchema.Type;
 

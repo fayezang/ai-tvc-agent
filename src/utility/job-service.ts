@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import type { VideoGenerationRequest, VideoJob, VideoTaskState } from "../shared/contracts.js";
 import { isTerminalVideoTaskState } from "../shared/video-task-states.js";
+import { triageDanglingJobs, type TriageResult } from "./job-recovery.js";
 import { OrzClient, type OrzTaskResponse } from "./providers/orz-client.js";
 import { resolveOrzAdapter } from "./providers/orz-adapters.js";
 import { persistVideoOutputs } from "./video-assets.js";
@@ -66,7 +67,48 @@ const rowToJob = (row: JobRow): VideoJob => {
   };
 };
 
+/**
+ * JobService 需要的最小 SQLite 接口。
+ *
+ * 与 migrations.ts 的 MigrationRunnerDatabase 同理：生产环境用
+ * better-sqlite3，但它的原生模块按 Electron ABI 编译，在 bun/node 下
+ * 加载即崩溃（SIGKILL）。依赖接口而非具体驱动，才能用同为真实 SQLite
+ * 引擎的 bun:sqlite 验证「恢复 → 落盘」这条完整链路。
+ */
+export interface JobDatabase {
+  prepare(sql: string): {
+    get(...params: readonly unknown[]): unknown;
+    run(...params: readonly unknown[]): unknown;
+    all(...params: readonly unknown[]): unknown[];
+  };
+  close(): void;
+}
+
+export type JobDatabaseOpener = (path: string) => JobDatabase;
+
+const openBetterSqlite: JobDatabaseOpener = (path) => {
+  const db = new Database(path);
+  db.pragma("journal_mode = WAL");
+  return db as unknown as JobDatabase;
+};
+
 export class JobService {
+  /**
+   * baseUrl 与 openDatabase 都可注入，默认为真实 ORZ 网关与 better-sqlite3。
+   *
+   * 这是为了让恢复与轮询能对着 Bun.serve 起的真实 HTTP 服务、真实 SQLite
+   * 文件做端到端验证：「恢复时发现任务已完成 → 视频落盘」横跨查询、下载、
+   * 校验、写盘四步，只有整条跑通才算验证过。本项目不 mock 网络与文件系统。
+   */
+  constructor(
+    private readonly baseUrl?: string,
+    private readonly openDatabase: JobDatabaseOpener = openBetterSqlite
+  ) {}
+
+  private client(apiKey: string): OrzClient {
+    return this.baseUrl ? new OrzClient(apiKey, this.baseUrl) : new OrzClient(apiKey);
+  }
+
   async submit(request: VideoGenerationRequest, apiKey: string): Promise<VideoJob> {
     const adapter = resolveOrzAdapter(request.modelId);
     const now = new Date().toISOString();
@@ -87,7 +129,7 @@ export class JobService {
       updatedAt: now
     }, request);
     try {
-      const task = await new OrzClient(apiKey).submitVideo(adapter.build(request));
+      const task = await this.client(apiKey).submitVideo(adapter.build(request));
       return await this.updateFromProvider(request.projectRoot, id, task);
     } catch (error) {
       return this.fail(request.projectRoot, id, error);
@@ -99,7 +141,7 @@ export class JobService {
     if (!row.provider_task_id) return rowToJob(row);
     if (isTerminal(row.state)) return rowToJob(row);
     try {
-      const task = await new OrzClient(apiKey).getTask(row.provider_task_id);
+      const task = await this.client(apiKey).getTask(row.provider_task_id);
       return await this.updateFromProvider(projectRoot, jobId, task);
     } catch (error) {
       return this.fail(projectRoot, jobId, error);
@@ -110,7 +152,7 @@ export class JobService {
     const row = this.getRow(projectRoot, jobId);
     if (!row.provider_task_id) return this.patch(projectRoot, jobId, { state: "canceled", stage: "已取消" });
     try {
-      const task = await new OrzClient(apiKey).cancelTask(row.provider_task_id);
+      const task = await this.client(apiKey).cancelTask(row.provider_task_id);
       return await this.updateFromProvider(projectRoot, jobId, task);
     } catch (error) {
       return this.fail(projectRoot, jobId, error);
@@ -121,6 +163,48 @@ export class JobService {
     const row = this.getRow(projectRoot, jobId);
     const request = JSON.parse(row.request_json) as VideoGenerationRequest;
     return this.submit(request, apiKey);
+  }
+
+  /**
+   * 启动恢复：分诊上次运行遗留的悬空任务，并把可查询的那些问回 ORZ。
+   *
+   * 绝不重新提交。只查询已有 provider_task_id 的任务——重新生成会产生
+   * 一次用户没有授权的真实计费，而恢复的目的恰恰是把已经付过的钱拿回来。
+   *
+   * 查询走 refresh，因此若服务端那边任务其实已经完成，会经由
+   * updateFromProvider → persistCompleted 正常落盘，而不是直接置
+   * completed 留下一个只有远程 URL 的空壳。
+   */
+  async recoverInterrupted(
+    projectRoot: string,
+    apiKey: string | null,
+    onJobUpdate?: (job: VideoJob) => void
+  ): Promise<{ recovered: VideoJob[]; failed: VideoJob[]; interrupted: VideoJob[] }> {
+    const db = this.open(projectRoot);
+    let triage: TriageResult;
+    try {
+      triage = triageDanglingJobs(db, { canQueryProvider: Boolean(apiKey) });
+    } finally {
+      db.close();
+    }
+
+    const failed = triage.failed.map((jobId) => this.get(projectRoot, jobId));
+    const interrupted = triage.interrupted.map((jobId) => this.get(projectRoot, jobId));
+    // 分诊结论先推给 UI：判失败的任务用户马上就能重试，
+    // 不必等前面那些还在查询的任务全部返回。
+    for (const job of [...failed, ...interrupted]) onJobUpdate?.(job);
+
+    // 查询逐个进行而非并发：恢复常常一次涉及多个任务，
+    // 并发打过去容易触发 ORZ 限流，反而让本可恢复的任务失败。
+    const recovered: VideoJob[] = [];
+    for (const jobId of triage.recovering) {
+      if (!apiKey) continue;
+      const job = await this.refresh(projectRoot, jobId, apiKey);
+      onJobUpdate?.(job);
+      recovered.push(job);
+    }
+
+    return { recovered, failed, interrupted };
   }
 
   selectVariant(projectRoot: string, jobId: string, outputUrl: string): VideoJob {
@@ -331,9 +415,7 @@ export class JobService {
     return row;
   }
 
-  private open(projectRoot: string): Database.Database {
-    const db = new Database(`${projectRoot}/.agent/index.sqlite`);
-    db.pragma("journal_mode = WAL");
-    return db;
+  private open(projectRoot: string): JobDatabase {
+    return this.openDatabase(`${projectRoot}/.agent/index.sqlite`);
   }
 }

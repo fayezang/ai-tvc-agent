@@ -2,22 +2,32 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { AgentUiEvent, DesktopApi, VideoGenerationRequest } from "../shared/contracts.js";
 import { IpcChannels } from "../shared/ipc-channels.js";
 
+/**
+ * IPC 边界上的类型守卫。
+ *
+ * 这里漏掉一个成员，对应的事件会被静默丢弃——没有报错，只是永远不到达
+ * renderer。AgentUiEventSchema 每新增一个成员，本白名单必须同步。
+ */
+const AGENT_EVENT_TYPES = [
+  "agent-start",
+  "text-delta",
+  "tool-start",
+  "tool-end",
+  "project-changed",
+  "agent-end",
+  "agent-error",
+  "video-job"
+] as const;
+
 const isAgentUiEvent = (input: unknown): input is AgentUiEvent => {
   if (!input || typeof input !== "object") return false;
   const event = input as Record<string, unknown>;
-  return (
-    typeof event.type === "string" &&
-    [
-      "agent-start",
-      "text-delta",
-      "tool-start",
-      "tool-end",
-      "project-changed",
-      "agent-end",
-      "agent-error"
-    ].includes(event.type) &&
-    typeof event.requestId === "string"
-  );
+  if (typeof event.type !== "string") return false;
+  if (!(AGENT_EVENT_TYPES as readonly string[]).includes(event.type)) return false;
+  // video-job 由轮询器与启动恢复主动发出，不属于任何一次用户请求，
+  // 因此没有 requestId。对它套用 requestId 检查会把它全部挡掉。
+  if (event.type === "video-job") return Boolean(event.job) && typeof event.job === "object";
+  return typeof event.requestId === "string";
 };
 
 const api: DesktopApi = {

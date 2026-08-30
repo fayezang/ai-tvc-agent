@@ -44,8 +44,34 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
   switch (request.method) {
     case "project.create":
       return projectService.create(payload.parentPath, payload.input);
-    case "project.open":
-      return projectService.open(payload.rootPath);
+    case "project.open": {
+      const state = await projectService.open(payload.rootPath);
+      // 打开项目时把上次运行遗留的悬空任务重新纳入跟踪。
+      //
+      // 不 await：恢复要向 ORZ 逐个查询，慢的话会把打开项目这个动作
+      // 一起拖住。分诊本身是同步落库的，因此即使查询还没回来，
+      // 数据库里的状态也已经是真实的了。
+      //
+      // 没有 API Key 时依然要跑：分诊会把悬空任务标为 interrupted，
+      // 用户至少能看见它们，而不是对着一个永远停在 generating 的界面。
+      void jobService
+        .recoverInterrupted(payload.rootPath, request.secrets?.apiKey ?? null, (job) =>
+          parentPort.postMessage({ type: "event", event: { type: "video-job", job } })
+        )
+        .catch((error: unknown) => {
+          parentPort.postMessage({
+            type: "event",
+            event: {
+              type: "agent-error",
+              requestId: request.id,
+              message: `恢复上次未完成的视频任务时出错：${
+                error instanceof Error ? error.message : "未知错误"
+              }`
+            }
+          });
+        });
+      return state;
+    }
     case "project.saveCanvas":
       return projectService.saveCanvas(payload.projectRoot, payload.canvas);
     case "project.readBody":

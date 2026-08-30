@@ -318,6 +318,14 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
           )
         );
       }
+      if (event.type === "video-job") {
+        // 由 Utility Process 主动推送：启动恢复找回的任务，以及轮询器的
+        // 每次状态更新。面板此前只认自己提交的那一个任务，重启后恢复回来的
+        // 任务无处显示。
+        setVideoJob((current) =>
+          current === null || current.id === event.job.id ? event.job : current
+        );
+      }
       if (event.type === "project-changed") void onProjectChanged();
       }),
     [onProjectChanged]

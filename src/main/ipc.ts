@@ -84,12 +84,19 @@ export const registerIpc = (window: BrowserWindow, utility: UtilityClient): void
       properties: ["openDirectory"]
     });
     if (selection.canceled || !selection.filePaths[0]) return null;
-    const result = decode(ProjectStateSchema, await utility.call("project.open", { rootPath: selection.filePaths[0] }));
+    // 传 secrets：打开项目会触发悬空任务恢复，那需要 API Key 才能向 ORZ 查询。
+    const result = decode(
+      ProjectStateSchema,
+      await utility.call("project.open", { rootPath: selection.filePaths[0] }, credentials.secrets())
+    );
     activeProjectRoot = result.project.rootPath;
     return result;
   });
   handle(IpcChannels.projectReload, Schema.String, ProjectStateSchema, async (projectRoot) => {
-    const result = decode(ProjectStateSchema, await utility.call("project.open", { rootPath: projectRoot }));
+    const result = decode(
+      ProjectStateSchema,
+      await utility.call("project.open", { rootPath: projectRoot }, credentials.secrets())
+    );
     activeProjectRoot = result.project.rootPath;
     return result;
   });
