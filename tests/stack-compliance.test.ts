@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   scripts: Record<string, string>;
@@ -49,5 +49,43 @@ describe("fixed desktop technology stack", () => {
     expect(lock.package).toBe("@mariozechner/pi-agent-core");
     expect(lock.version).toBe("0.73.1");
     expect(lock.commit).toBe("781152fc24841dc54b22284514604048ebe5e2c9");
+  });
+});
+
+describe("migration readiness", () => {
+  const rootUrl = (name: string): URL => new URL(`../${name}`, import.meta.url);
+
+  test("keeps bun.lock as the single lockfile", () => {
+    // 基线指定 Bun 作为包管理器。多份锁文件并存会导致新机器
+    // 依赖解析结果与开发机不一致，属迁移阻断项。
+    expect(existsSync(rootUrl("bun.lock"))).toBe(true);
+    expect(existsSync(rootUrl("pnpm-lock.yaml"))).toBe(false);
+    expect(existsSync(rootUrl("package-lock.json"))).toBe(false);
+    expect(existsSync(rootUrl("pnpm-workspace.yaml"))).toBe(false);
+  });
+
+  test("documents every configurable variable in .env.example", () => {
+    const example = readFileSync(rootUrl(".env.example"), "utf8");
+    expect(example).toContain("ORZ_API_KEY=");
+    expect(example).toContain("ORZ_BASE_URL=https://orz.sh/api/proxy/v1");
+    // 必须说明密钥实际存放位置，避免使用者误以为需要把 Key 写进文件。
+    expect(example).toContain("safeStorage");
+  });
+
+  test("removes the Next.js legacy tree from the repository", () => {
+    // 这些目录不在 Electron 运行路径上，保留会污染代码搜索，
+    // 并使新接手者误判本项目使用了 CutAgent。
+    for (const path of ["src/app", "src/components", "src/lib", "src/types", "supabase"]) {
+      expect(existsSync(rootUrl(path)), path).toBe(false);
+    }
+  });
+
+  test("records the video backend decision so CutAgent needs no pinned commit", () => {
+    const decision = readFileSync(rootUrl("docs/decisions/0001-video-backend.md"), "utf8");
+    expect(decision).toContain("不需要锁定 CutAgent commit");
+    // ffmpeg 命令序列是 CutAgent 唯一被移植的内容，必须完整留存，
+    // 否则删除旧代码后第四批导出功能将失去依据。
+    expect(decision).toContain("force_original_aspect_ratio=decrease");
+    expect(decision).toContain("amix=inputs=2:duration=first");
   });
 });

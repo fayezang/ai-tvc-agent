@@ -18,6 +18,7 @@ import {
   type ProjectSummary
 } from "../shared/contracts.js";
 import { indexedNodes } from "./db-schema.js";
+import { runMigrations } from "./migrations.js";
 import {
   buildBriefRestatementMarkdown,
   buildInitialBrief,
@@ -241,40 +242,11 @@ export class ProjectService {
   private initializeIndex(rootPath: string, canvas: CanvasSnapshot): void {
     const sqlite = new Database(join(rootPath, ".agent", "index.sqlite"));
     sqlite.pragma("journal_mode = WAL");
-    sqlite.exec(`
-      CREATE TABLE IF NOT EXISTS indexed_nodes (
-        id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL,
-        title TEXT NOT NULL,
-        body_path TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS video_jobs (
-        id TEXT PRIMARY KEY,
-        provider_task_id TEXT,
-        model_id TEXT NOT NULL,
-        state TEXT NOT NULL,
-        progress REAL,
-        stage TEXT,
-        output_urls_json TEXT NOT NULL,
-        selected_output_url TEXT,
-        request_json TEXT NOT NULL,
-        error_json TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        revision INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE TABLE IF NOT EXISTS agent_transactions (
-        id TEXT PRIMARY KEY,
-        prompt TEXT NOT NULL,
-        selected_node_ids_json TEXT NOT NULL,
-        response TEXT,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-    `);
-    sqlite.close();
+    try {
+      runMigrations(sqlite);
+    } finally {
+      sqlite.close();
+    }
     this.indexNodes(rootPath, canvas);
   }
 
@@ -296,6 +268,9 @@ export class ProjectService {
   openIndex(rootPath: string): BetterSQLite3Database & { $client: Database.Database } {
     const sqlite = new Database(join(rootPath, ".agent", "index.sqlite"));
     sqlite.pragma("journal_mode = WAL");
+    // 打开既有项目时同样执行 migration：旧项目的库可能缺少后续版本新增的表或列。
+    // runMigrations 幂等，已应用过的不会重跑。
+    runMigrations(sqlite);
     return drizzle(sqlite) as BetterSQLite3Database & { $client: Database.Database };
   }
 
