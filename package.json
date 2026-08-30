@@ -6,6 +6,10 @@
   "type": "module",
   "main": "./out/main/index.js",
   "packageManager": "bun@1.4.0",
+  "engines": {
+    "bun": ">=1.4.0",
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "bun run typecheck && electron-vite build",

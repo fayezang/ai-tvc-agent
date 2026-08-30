@@ -11,6 +11,19 @@ Electron 桌面应用，本地优先：项目就是磁盘上的一个文件夹�
 
 ## 在新电脑上跑起来
 
+### 0. 先装对 bun 的版本
+
+**必须 bun ≥ 1.4.0。** 本仓库的 `bun.lock` 是 lockfileVersion 2，
+旧版 bun 会直接报 `error: Unknown lockfile version` 并停在第一步。
+
+```bash
+bun --version          # 必须 >= 1.4.0
+curl -fsSL https://bun.sh/install | bash    # 没装或版本过低就跑这句
+```
+
+装完新开一个终端，或 `source ~/.zshrc`，确认 `which bun` 指向新版本。
+若系统里有多个 bun（`~/.bun/bin/bun` 与 Homebrew 的），以 `which bun` 实际解析到的为准。
+
 ### 1. 装依赖
 
 ```bash
@@ -19,13 +32,21 @@ cd ai-tvc-agent
 bun install
 ```
 
-**必须用 bun**，本仓库只保留 `bun.lock` 一份锁文件。
+只保留 `bun.lock` 一份锁文件，不要用 npm / pnpm。
 `postinstall` 会自动执行 `electron-builder install-app-deps`，把 `better-sqlite3`
 按 Electron 的 ABI 重新编译——这一步不能跳过。
 
-没有 bun 就先装：`curl -fsSL https://bun.sh/install | bash`
+### 2. 先跑测试确认代码没问题
 
-### 2. 启动
+```bash
+bun test tests        # 应为 120 pass / 0 fail
+bun run typecheck     # 应无输出
+```
+
+**先跑这两条再启动应用。** 全过就说明代码是好的；
+之后 `dev` 若仍起不来，那是环境问题（见下），不必怀疑代码。
+
+### 3. 启动
 
 ```bash
 bun run dev
@@ -33,7 +54,7 @@ bun run dev
 
 Electron 窗口会自己打开，**不是浏览器页面**，没有 localhost 端口。
 
-### 3. 填 API Key
+### 4. 填 API Key
 
 首次使用在应用内「模型与 API」界面录入 ORZ API Key（<https://orz.sh>）。
 
@@ -41,6 +62,39 @@ Key 经 `safeStorage` 加密后存进系统钥匙串，**不写任何文件**，
 所以 Key 不会跟着 git 走，**每台新电脑都要重新录一次**——这是设计如此，不是遗漏。
 
 `.env.example` 只是可配置项清单，正常使用不需要 `.env` 文件。
+
+---
+
+## 迁移已有的项目数据
+
+代码与项目数据是分开的：**仓库里没有任何项目内容**。
+
+一个项目就是磁盘上任意位置的一个文件夹，自包含：
+
+```
+我的项目/
+├── project.json          项目元数据（时长、画幅）
+├── canvas.json           画布节点与连线
+├── nodes/*.md            Brief、创意、脚本正文
+├── assets/
+│   ├── videos/           已落盘的视频（第一批起不再依赖远程链接）
+│   ├── storyboards/      分镜图
+│   └── references/       参考图
+├── outputs/              导出成品（第四批启用）
+└── .agent/
+    ├── index.sqlite      节点索引与视频任务记录
+    └── trash/            删除节点时移入这里，非直接销毁
+```
+
+**整个文件夹拷到新电脑即可**，用应用内「打开已有项目」选中它。
+`.agent/index.sqlite` 会在打开时自动执行 migration 补齐新版本的表和列，
+旧项目不需要任何手工处理。
+
+拷贝时务必**连 `.agent/` 一起带上**（点开头的隐藏目录，
+Finder 里按 `Cmd+Shift+.` 显示）。丢了它会丢掉视频任务记录。
+
+**不要迁移 API Key**：旧机钥匙串里的内容无法也不应导出，在新机器重新录一次。
+
 
 ---
 
