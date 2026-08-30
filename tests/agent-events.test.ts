@@ -18,6 +18,9 @@ const sampleJob = {
   localPaths: [],
   selectedOutputUrl: null,
   selectedLocalPath: null,
+  parentJobId: null,
+  rootJobId: "job-1",
+  attempt: 1,
   error: null,
   createdAt: "2026-08-30T00:00:00.000Z",
   updatedAt: "2026-08-30T00:00:00.000Z"

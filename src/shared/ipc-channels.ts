@@ -34,5 +34,6 @@ export const IpcChannels = {
   videoRetry: "video:retry",
   videoGetJob: "video:get-job",
   videoSelectVariant: "video:select-variant",
+  videoChain: "video:chain",
   videoRenderProject: "video:render-project"
 } as const;

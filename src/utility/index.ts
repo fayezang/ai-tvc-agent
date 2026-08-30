@@ -166,6 +166,8 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
     }
     case "video.selectVariant":
       return jobService.selectVariant(payload.projectRoot, payload.jobId, payload.outputUrl);
+    case "video.chain":
+      return jobService.chain(payload.projectRoot, payload.jobId);
     case "video.renderProject":
       throw new Error("基础 MP4 合成将在视频生成闭环阶段启用；当前未执行任何伪导出。 ");
     case "agent.prompt": {

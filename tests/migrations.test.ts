@@ -79,7 +79,12 @@ describe("schema migrations", () => {
         "revision",
         // 0001 追加：视频必须落盘，远程 CDN 链接有时效，不能作为唯一资产。
         "local_paths_json",
-        "shot_id"
+        "shot_id",
+        // 0002 追加：重试链。旧实现每次重试新建一行且与原行毫无关联，
+        // 用户看到两条孤立记录，无法知道哪次是哪次的重试。
+        "parent_job_id",
+        "root_job_id",
+        "attempt"
       ]);
       expect(columns("indexed_nodes")).toEqual(["id", "kind", "title", "body_path", "updated_at"]);
     });
@@ -132,11 +137,17 @@ describe("schema migrations", () => {
         id: string;
         local_paths_json: string;
         shot_id: string | null;
+        root_job_id: string | null;
+        attempt: number;
       };
       expect(row.id).toBe("job-old");
       // 默认空数组而非 NULL：读取端可以直接 JSON.parse，无需处理两种缺失形态。
       expect(row.local_paths_json).toBe("[]");
       expect(row.shot_id).toBeNull();
+      // 0002 回填：升级前的任务各自成链，自己就是自己的根。
+      // 留 NULL 会让按链查询漏掉全部历史任务。
+      expect(row.root_job_id).toBe("job-old");
+      expect(row.attempt).toBe(1);
     });
   });
 

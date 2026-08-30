@@ -205,6 +205,12 @@ export const VideoJobSchema = Schema.Struct({
   selectedOutputUrl: Schema.NullOr(Schema.String),
   /** 选中版本对应的本地路径。UI 应优先使用它而非远程 URL。 */
   selectedLocalPath: Schema.NullOr(Schema.String),
+  /** 上一次尝试的 jobId。首次提交为 null。 */
+  parentJobId: Schema.NullOr(Schema.String),
+  /** 首次尝试的 jobId，整条重试链共享同一个值。首次提交时等于自身 id。 */
+  rootJobId: Schema.String,
+  /** 第几次尝试，从 1 开始。 */
+  attempt: Schema.Number.pipe(Schema.int(), Schema.positive()),
   error: Schema.NullOr(
     Schema.Struct({
       code: Schema.String,
@@ -216,6 +222,30 @@ export const VideoJobSchema = Schema.Struct({
   updatedAt: Schema.String
 });
 export type VideoJob = typeof VideoJobSchema.Type;
+
+/**
+ * 一条重试链的全貌。
+ *
+ * 旧实现里每次重试都新建一行且与原行毫无关联：用户看到两条孤立记录，
+ * 无法知道哪次是哪次的重试，成本也无从归集。
+ */
+export const VideoJobChainSchema = Schema.Struct({
+  rootJobId: Schema.String,
+  /** 按 attempt 升序排列的全部尝试。 */
+  attempts: Schema.Array(VideoJobSchema),
+  /**
+   * 整条链累计的计费秒数。
+   *
+   * ORZ 按秒计费，秒数是我们能真实核算的量。金额需要价格表（第三批），
+   * 在那之前 totalCost 保持 null——按错误汇率或猜测的单价给出金额，
+   * 比不给更糟。
+   */
+  totalBilledSeconds: Schema.Number,
+  currency: Schema.Literal("CNY"),
+  totalCost: Schema.NullOr(Schema.Number),
+  costNote: Schema.String
+});
+export type VideoJobChain = typeof VideoJobChainSchema.Type;
 
 export const VideoEstimateSchema = Schema.Struct({
   modelId: Schema.String,
@@ -446,6 +476,8 @@ export interface DesktopApi {
     submit(input: VideoGenerationRequest): Promise<VideoJob>;
     cancel(jobId: string): Promise<VideoJob>;
     retry(jobId: string): Promise<VideoJob>;
+    /** 查询一条重试链的全部尝试与累计用量。 */
+    chain(jobId: string): Promise<VideoJobChain>;
     getJob(jobId: string): Promise<VideoJob>;
     selectVariant(jobId: string, outputUrl: string): Promise<VideoJob>;
     renderProject(projectRoot: string): Promise<{ outputPath: string }>;

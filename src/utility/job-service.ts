@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import type { VideoGenerationRequest, VideoJob, VideoTaskState } from "../shared/contracts.js";
+import type {
+  VideoGenerationRequest,
+  VideoJob,
+  VideoJobChain,
+  VideoTaskState
+} from "../shared/contracts.js";
 import { isTerminalVideoTaskState } from "../shared/video-task-states.js";
 import { triageDanglingJobs, type TriageResult } from "./job-recovery.js";
 import { OrzClient, type OrzTaskResponse } from "./providers/orz-client.js";
@@ -20,6 +25,9 @@ interface JobRow {
   shot_id: string | null;
   request_json: string;
   error_json: string | null;
+  parent_job_id: string | null;
+  root_job_id: string | null;
+  attempt: number;
   created_at: string;
   updated_at: string;
 }
@@ -59,6 +67,11 @@ const rowToJob = (row: JobRow): VideoJob => {
     localPaths,
     selectedOutputUrl,
     selectedLocalPath: selectedIndex >= 0 ? (localPaths[selectedIndex] ?? null) : null,
+    parentJobId: row.parent_job_id,
+    // 升级前的旧行可能没有回填到（理论上 migration 0002 已回填，
+    // 这里再兜一层，保证读取端永远拿到一个非空的链标识）。
+    rootJobId: row.root_job_id ?? row.id,
+    attempt: row.attempt ?? 1,
     error: row.error_json
       ? (JSON.parse(row.error_json) as { code: string; message: string; retryable: boolean })
       : null,
@@ -109,7 +122,11 @@ export class JobService {
     return this.baseUrl ? new OrzClient(apiKey, this.baseUrl) : new OrzClient(apiKey);
   }
 
-  async submit(request: VideoGenerationRequest, apiKey: string): Promise<VideoJob> {
+  async submit(
+    request: VideoGenerationRequest,
+    apiKey: string,
+    lineage?: { parentJobId: string; rootJobId: string; attempt: number }
+  ): Promise<VideoJob> {
     const adapter = resolveOrzAdapter(request.modelId);
     const now = new Date().toISOString();
     const id = randomUUID();
@@ -124,6 +141,10 @@ export class JobService {
       localPaths: [],
       selectedOutputUrl: null,
       selectedLocalPath: null,
+      parentJobId: lineage?.parentJobId ?? null,
+      // 首次提交时自己就是链的根，无需等到第一次重试才建立链身份。
+      rootJobId: lineage?.rootJobId ?? id,
+      attempt: lineage?.attempt ?? 1,
       error: null,
       createdAt: now,
       updatedAt: now
@@ -159,10 +180,74 @@ export class JobService {
     }
   }
 
+  /**
+   * 重试。
+   *
+   * 原 job 行完整保留——它记录着那次尝试真实发生过、失败在哪一步、
+   * 花了多少时间。删掉或改写它等于抹掉用户已经付过的那次成本。
+   * 新 job 通过 parent_job_id / root_job_id 挂到同一条链上。
+   */
   async retry(projectRoot: string, jobId: string, apiKey: string): Promise<VideoJob> {
     const row = this.getRow(projectRoot, jobId);
     const request = JSON.parse(row.request_json) as VideoGenerationRequest;
-    return this.submit(request, apiKey);
+    const rootJobId = row.root_job_id ?? row.id;
+    // attempt 取整条链的最大值加一，而不是父任务的 attempt 加一：
+    // 用户可能从链中任意一次失败的尝试发起重试，若按父任务递增会产生重号。
+    const attempt = this.maxAttempt(projectRoot, rootJobId) + 1;
+    return this.submit(request, apiKey, { parentJobId: row.id, rootJobId, attempt });
+  }
+
+  /**
+   * 一条重试链的全部尝试与累计用量。
+   *
+   * 传入链中任意一次尝试的 jobId 均可，都会归到同一条链。
+   */
+  chain(projectRoot: string, jobId: string): VideoJobChain {
+    const row = this.getRow(projectRoot, jobId);
+    const rootJobId = row.root_job_id ?? row.id;
+    const db = this.open(projectRoot);
+    let rows: JobRow[];
+    try {
+      rows = db
+        .prepare("SELECT * FROM video_jobs WHERE root_job_id = ? OR id = ? ORDER BY attempt ASC")
+        .all(rootJobId, rootJobId) as JobRow[];
+    } finally {
+      db.close();
+    }
+
+    const attempts = rows.map(rowToJob);
+    // 只计入真正产出了视频的尝试。提交失败、被取消、或崩在提交前的尝试
+    // 不产生计费秒数，把它们算进去会虚高整条链的用量。
+    const totalBilledSeconds = rows.reduce((total, current) => {
+      if (current.state !== "completed") return total;
+      const request = JSON.parse(current.request_json) as Partial<VideoGenerationRequest>;
+      return total + (typeof request.duration === "number" ? request.duration : 0);
+    }, 0);
+
+    return {
+      rootJobId,
+      attempts,
+      totalBilledSeconds,
+      currency: "CNY",
+      // 价格表属第三批。在它接入之前返回 null 而非估算值——
+      // 按猜测的单价给出金额，比不给金额更糟。
+      totalCost: null,
+      costNote:
+        `整条链共 ${attempts.length} 次尝试，其中 ${rows.filter((current) => current.state === "completed").length} 次成功产出，` +
+        `累计计费时长 ${totalBilledSeconds} 秒。ORZ 按秒计价（人民币），单价表尚未接入，具体金额以 ORZ 控制台为准。`
+    };
+  }
+
+  private maxAttempt(projectRoot: string, rootJobId: string): number {
+    const db = this.open(projectRoot);
+    try {
+      const row = db
+        .prepare("SELECT MAX(attempt) AS highest FROM video_jobs WHERE root_job_id = ? OR id = ?")
+        .get(rootJobId, rootJobId) as { highest: number | null } | undefined;
+      return row?.highest ?? 1;
+    } finally {
+      db.close();
+    }
   }
 
   /**
@@ -343,8 +428,9 @@ export class JobService {
     db.prepare(`
       INSERT INTO video_jobs (
         id, provider_task_id, model_id, state, progress, stage, output_urls_json,
-        local_paths_json, shot_id, request_json, error_json, created_at, updated_at, revision
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        local_paths_json, shot_id, request_json, error_json,
+        parent_job_id, root_job_id, attempt, created_at, updated_at, revision
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `).run(
       job.id,
       job.providerTaskId,
@@ -357,6 +443,9 @@ export class JobService {
       request.shotId,
       JSON.stringify(request),
       null,
+      job.parentJobId,
+      job.rootJobId,
+      job.attempt,
       job.createdAt,
       job.updatedAt
     );

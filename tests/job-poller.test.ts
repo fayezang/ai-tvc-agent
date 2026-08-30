@@ -21,6 +21,9 @@ const job = (state: VideoTaskState, id = "job-1"): VideoJob => ({
   localPaths: [],
   selectedOutputUrl: null,
   selectedLocalPath: null,
+  parentJobId: null,
+  rootJobId: id,
+  attempt: 1,
   error: null,
   createdAt: "2026-08-30T00:00:00.000Z",
   updatedAt: "2026-08-30T00:00:00.000Z"

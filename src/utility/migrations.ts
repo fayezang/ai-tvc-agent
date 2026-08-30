@@ -65,6 +65,20 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE video_jobs ADD COLUMN local_paths_json TEXT NOT NULL DEFAULT '[]';
       ALTER TABLE video_jobs ADD COLUMN shot_id TEXT;
     `
+  },
+  {
+    id: "0002_video_retry_chain",
+    description: "重试链：父任务、根任务与第几次尝试",
+    sql: `
+      ALTER TABLE video_jobs ADD COLUMN parent_job_id TEXT;
+      ALTER TABLE video_jobs ADD COLUMN root_job_id TEXT;
+      ALTER TABLE video_jobs ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1;
+      -- 既有任务各自成链：自己就是自己的根。
+      -- 不回填的话它们的 root_job_id 为 NULL，按链查询会全部漏掉，
+      -- 升级前产生的历史任务将无法归集。
+      UPDATE video_jobs SET root_job_id = id WHERE root_job_id IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_video_jobs_root ON video_jobs (root_job_id);
+    `
   }
 ];
 

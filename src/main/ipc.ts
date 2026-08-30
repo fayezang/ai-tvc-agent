@@ -34,6 +34,7 @@ import {
   VideoEstimateSchema,
   VideoGenerationRequestSchema,
   VideoJobSchema,
+  VideoJobChainSchema,
   WriteBodyRequestSchema,
   ProjectStateSchema
 } from "../shared/contracts.js";
@@ -202,6 +203,10 @@ export const registerIpc = (window: BrowserWindow, utility: UtilityClient): void
       return utility.call("video.selectVariant", { projectRoot: activeProjectRoot, jobId, outputUrl });
     }
   );
+  handle(IpcChannels.videoChain, jobIdSchema, VideoJobChainSchema, (jobId) => {
+    if (!activeProjectRoot) throw new Error("请先打开项目");
+    return utility.call("video.chain", { projectRoot: activeProjectRoot, jobId });
+  });
   handle(
     IpcChannels.videoRenderProject,
     Schema.String,
