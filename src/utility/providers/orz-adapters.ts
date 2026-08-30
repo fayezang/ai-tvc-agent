@@ -79,30 +79,6 @@ class VeoAdapter implements ProviderAdapter {
   }
 }
 
-class HailuoAdapter implements ProviderAdapter {
-  readonly modelId = ORZ_MODELS.hailuo;
-
-  build(request: VideoGenerationRequest): OrzGenerationPayload {
-    assertModel(request, this.modelId);
-    const images = request.referenceImageUrls;
-    return {
-      model: this.modelId,
-      input: {
-        prompt: request.prompt,
-        version: "2.3",
-        duration: request.duration,
-        aspect_ratio: request.aspectRatio,
-        resolution: request.resolution.toUpperCase(),
-        fps: request.fps ?? 24,
-        generate_audio: request.generateAudio,
-        ...(images[0] ? { image_url: images[0] } : {}),
-        ...(images.length > 1 ? { image_urls: images } : {}),
-        ...optionalCommon(request)
-      }
-    };
-  }
-}
-
 class SeedanceAdapter implements ProviderAdapter {
   readonly modelId = ORZ_MODELS.seedance;
 
@@ -135,7 +111,6 @@ class SeedanceAdapter implements ProviderAdapter {
 const registry = new Map<string, ProviderAdapter>([
   [ORZ_MODELS.kling, new KlingAdapter()],
   [ORZ_MODELS.veo, new VeoAdapter()],
-  [ORZ_MODELS.hailuo, new HailuoAdapter()],
   [ORZ_MODELS.seedance, new SeedanceAdapter()]
 ]);
 

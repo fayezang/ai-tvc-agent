@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import type { VideoGenerationRequest } from "../src/shared/contracts.js";
 import {
   DEFAULT_PROVIDER_MODELS,
+  MODEL_DEFINITIONS,
   ORZ_MODELS,
   SHOT_ROLE_MODEL,
   resolveVideoModelForRole
@@ -84,9 +85,16 @@ describe("ORZ Provider Adapter Registry", () => {
     expect(registeredVideoModelIds()).toEqual([
       ORZ_MODELS.kling,
       ORZ_MODELS.veo,
-      ORZ_MODELS.hailuo,
       ORZ_MODELS.seedance
     ]);
+  });
+
+  test("no longer ships Hailuo 2.3 in any layer", () => {
+    // 该模型报价为 ¥36/s，任意分辨率同价，5 秒即 ¥180——比 Seedance 1080p 贵约 7 倍。
+    // 产品定位为低成本试验，不发布它，也就不必把这个可疑数量级带进价格表。
+    expect(registeredVideoModelIds()).not.toContain("minimax/hailuo-2-3");
+    expect(MODEL_DEFINITIONS.some((model) => model.id === "minimax/hailuo-2-3")).toBe(false);
+    expect(() => resolveOrzAdapter("minimax/hailuo-2-3")).toThrow("未注册模型");
   });
 
   test("uses the saved video routing instead of a per-request model ID", () => {
@@ -94,11 +102,11 @@ describe("ORZ Provider Adapter Registry", () => {
       hook: ORZ_MODELS.seedance,
       reveal: ORZ_MODELS.kling,
       proof: ORZ_MODELS.veo,
-      cta: ORZ_MODELS.hailuo
+      cta: ORZ_MODELS.kling
     };
     expect(resolveVideoModelForRole("hook", routing)).toBe(ORZ_MODELS.seedance);
     expect(resolveVideoModelForRole("reveal", routing)).toBe(ORZ_MODELS.kling);
-    expect(resolveVideoModelForRole("emotional-proof", routing)).toBe(ORZ_MODELS.hailuo);
+    expect(resolveVideoModelForRole("emotional-proof", routing)).toBe(ORZ_MODELS.kling);
   });
 
   test("builds Seedance 2 REST input with lowercase resolution and typed reference arrays", () => {
@@ -124,7 +132,7 @@ describe("ORZ Provider Adapter Registry", () => {
     });
   });
 
-  test("builds Kling, Veo and Hailuo with their own REST shapes", () => {
+  test("builds Kling and Veo with their own REST shapes", () => {
     const kling = resolveOrzAdapter(ORZ_MODELS.kling).build(
       request({ modelId: ORZ_MODELS.kling, role: "hook", duration: 5, resolution: "720p" })
     );
@@ -137,12 +145,6 @@ describe("ORZ Provider Adapter Registry", () => {
     expect(veo.input.version).toBe("3.1");
     expect(veo.input.duration).toBe(8);
     expect(veo.input.fps).toBe(30);
-
-    const hailuo = resolveOrzAdapter(ORZ_MODELS.hailuo).build(
-      request({ modelId: ORZ_MODELS.hailuo, role: "proof", duration: 5 })
-    );
-    expect(hailuo.input.version).toBe("2.3");
-    expect(hailuo.input.resolution).toBe("1080P");
   });
 
   test("rejects durations unsupported by a concrete provider", () => {

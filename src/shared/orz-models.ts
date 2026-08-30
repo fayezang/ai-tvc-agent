@@ -13,7 +13,6 @@ export const ORZ_MODELS = {
   geminiFlash: "google/gemini-2-5-flash",
   kling: "kuaishou/kling-2-5-turbo",
   veo: "google/veo-3-1",
-  hailuo: "minimax/hailuo-2-3",
   seedance: "bytedance/seedance-2",
   storyboard: "google/gemini-image-3-1",
   gptImageLow: "openai/gpt-image-2-low",
@@ -113,15 +112,6 @@ export const MODEL_DEFINITIONS: readonly ModelDefinition[] = [
     aspectRatios: ["16:9", "9:16", "1:1", "21:9", "4:3", "3:4"]
   },
   {
-    id: ORZ_MODELS.hailuo,
-    name: "MiniMax Hailuo 2.3",
-    provider: "ORZ",
-    media: "video",
-    durations: [5],
-    resolutions: ["480p", "720p", "1080p"],
-    aspectRatios: ["16:9", "9:16", "1:1"]
-  },
-  {
     id: ORZ_MODELS.seedance,
     name: "Seedance 2",
     provider: "ORZ",
@@ -151,7 +141,5 @@ export const VIDEO_MODEL_OPTIONS: readonly OrzModelOption[] = MODEL_DEFINITIONS
         ? "动作与快速运镜 · 5/10 秒"
         : model.id === ORZ_MODELS.veo
           ? "写实产品展示 · 成本较高"
-          : model.id === ORZ_MODELS.hailuo
-            ? "真实感与人物镜头 · 5 秒"
-            : "低成本测试默认 · 4–15 秒"
+          : "低成本测试默认 · 4–15 秒"
   }));
