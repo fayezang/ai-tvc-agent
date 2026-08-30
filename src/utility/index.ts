@@ -1,4 +1,5 @@
 import { MODEL_DEFINITIONS, resolveVideoModelForRole } from "../shared/orz-models.js";
+import { estimateVideoCost, normalizeVideoParams } from "../shared/video-estimate.js";
 import type { ProviderVideoRouting, VideoGenerationRequest, VideoJob } from "../shared/contracts.js";
 import { AgentService } from "./agent-service.js";
 import { JobService } from "./job-service.js";
@@ -132,20 +133,28 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
       return projectService.deleteNodes(payload.projectRoot, payload.nodeIds);
     case "video.listModels":
       return MODEL_DEFINITIONS;
-    case "video.estimate":
-      return {
-        modelId: resolveVideoModelForRole(payload.role, request.secrets?.videoModelRouting),
-        currency: "CNY",
-        // 真实价格表与按秒计费逻辑属第三批范围。在此之前返回 null 而非估算值，
-        // 避免用户依据编造的数字判断成本。
-        amount: null,
-        note: "尚未接入价格表；ORZ 按秒计费（人民币），提交前以 ORZ 控制台的实时计费为准。"
-      };
-    case "video.submit": {
+    case "video.estimate": {
+      // 估价是纯函数，不发任何网络请求，因此提交前可以反复调用。
+      // 模型由角色路由决定，不采用调用方自带的 modelId。
       const generation = request.payload as VideoGenerationRequest;
-      const configuredRequest: VideoGenerationRequest = {
+      return estimateVideoCost({
         ...generation,
         modelId: resolveVideoModelForRole(generation.role, request.secrets?.videoModelRouting)
+      });
+    }
+    case "video.submit": {
+      const generation = request.payload as VideoGenerationRequest;
+      // 与 video.estimate 共用同一套规范化，否则会出现「报了价却提交失败」：
+      // 例如 Veo 只有 8 秒档，估价按 8 秒报，而未规范化的 5 秒请求会被
+      // Adapter 的 assertModel 直接拒掉。用户看到的价必须是真能提交的那一档。
+      const modelId = resolveVideoModelForRole(generation.role, request.secrets?.videoModelRouting);
+      const normalized = normalizeVideoParams({ ...generation, modelId });
+      const configuredRequest: VideoGenerationRequest = {
+        ...generation,
+        modelId,
+        duration: normalized.duration,
+        resolution: normalized.resolution,
+        aspectRatio: normalized.aspectRatio
       };
       const apiKey = requireApiKey(request);
       const job = await jobService.submit(configuredRequest, apiKey);

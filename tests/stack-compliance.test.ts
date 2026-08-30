@@ -100,19 +100,40 @@ describe("migration readiness", () => {
 
 describe("cost estimation honesty", () => {
   const contracts = readFileSync(new URL("../src/shared/contracts.ts", import.meta.url), "utf8");
-  const utilityIndex = readFileSync(new URL("../src/utility/index.ts", import.meta.url), "utf8");
+  const pricing = readFileSync(new URL("../src/shared/orz-pricing.ts", import.meta.url), "utf8");
+  const estimate = readFileSync(new URL("../src/shared/video-estimate.ts", import.meta.url), "utf8");
 
   test("prices are denominated in the currency ORZ actually bills in", () => {
     // ORZ 按秒计费且以人民币计价。写死 USD 会让用户按错误汇率理解成本。
     expect(contracts).toContain('currency: Schema.Literal("CNY")');
     expect(contracts).not.toContain('Schema.Literal("USD")');
-    expect(utilityIndex).toContain('currency: "CNY"');
+    expect(estimate).toContain('currency: "CNY" as const');
   });
 
-  test("never fabricates an amount when no price table is wired up", () => {
-    // 价格表属第三批。在此之前必须返回 null 并说明原因，
-    // 而不是填一个看起来合理的数字。
-    expect(utilityIndex).toContain("amount: null");
-    expect(utilityIndex).toContain("尚未接入价格表");
+  test("keeps an amount nullable all the way through the contract", () => {
+    // 第三批接入了真实价格表，但「拿不到报价就返回 null」这条不变量没有放松：
+    // 部分模型的部分分辨率档 ORZ 确实没有报价，此时不许填一个看起来合理的数字。
+    expect(contracts).toContain("amount: Schema.NullOr(Schema.Number)");
+    expect(contracts).toContain("amountPerSecond: Schema.NullOr(Schema.Number)");
+    expect(pricing).toContain("amountPerSecond: number | null");
+    // 价格表里凡是返回 null 的分支都必须同时给出原因。
+    expect(pricing).toContain("reason: string | null");
+  });
+
+  test("shows how fresh the price data is wherever an amount appears", () => {
+    // 价格随时变动。金额与抓取日期必须同时出现，否则用户无法判断数字有多新。
+    expect(pricing).toContain("PRICING_FETCHED_AT");
+    expect(pricing).toContain("PRICING_DISCLAIMER");
+    expect(contracts).toContain("pricingFetchedAt: Schema.String");
+    expect(estimate).toContain("pricingFetchedAt: PRICING_FETCHED_AT");
+  });
+
+  test("separates the seconds billed from the seconds the script asked for", () => {
+    // 模型只有离散时长档时会生成更长素材再裁剪，而 ORZ 按生成时长计费。
+    // 两个数字混为一谈会让用户按错误的秒数理解账单。
+    expect(contracts).toContain("billedSeconds: Schema.Number");
+    expect(contracts).toContain("requestedSeconds: Schema.Number");
+    expect(estimate).toContain("billedSeconds: normalized.duration");
+    expect(estimate).toContain("requestedSeconds: request.duration");
   });
 });

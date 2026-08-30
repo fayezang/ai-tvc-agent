@@ -253,8 +253,26 @@ export const VideoEstimateSchema = Schema.Struct({
   currency: Schema.Literal("CNY"),
   // 拿不到该模型该分辨率的真实报价时返回 null 并在 note 中说明，绝不猜测填数。
   amount: Schema.NullOr(Schema.Number),
+  amountPerSecond: Schema.NullOr(Schema.Number),
+  /**
+   * 实际计费秒数。与 requestedSeconds 可能不同：模型只有离散时长档时，
+   * 系统生成更长素材再裁剪，而 ORZ 按生成时长计费。
+   * Veo 3.1 固定 8 秒，脚本要 5 秒时这里是 8。
+   */
+  billedSeconds: Schema.Number,
+  /** 脚本要求的镜头时长。billedSeconds 大于它时说明发生了向上取整。 */
+  requestedSeconds: Schema.Number,
+  /** 是否走了参考图折扣价。 */
+  discounted: Schema.Boolean,
+  /**
+   * 时长取整、分辨率与画幅降级等调整的逐条说明。
+   * 规范 §3.5 要求自动模式必须输出这些内容——静默改参数是禁止的。
+   */
+  adjustments: Schema.Array(Schema.String),
+  pricingFetchedAt: Schema.String,
   note: Schema.String
 });
+export type VideoEstimate = typeof VideoEstimateSchema.Type;
 
 export const ModelDefinitionSchema = Schema.Struct({
   id: Schema.String,
