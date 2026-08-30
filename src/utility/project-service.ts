@@ -18,6 +18,7 @@ import {
   type ProjectSummary
 } from "../shared/contracts.js";
 import { indexedNodes } from "./db-schema.js";
+import { mergeCanvasFromClient } from "./canvas-merge.js";
 import { runMigrations } from "./migrations.js";
 import {
   buildBriefRestatementMarkdown,
@@ -146,6 +147,19 @@ export class ProjectService {
     await writeAtomic(join(rootPath, "canvas.json"), JSON.stringify(decoded, null, 2));
     this.indexNodes(rootPath, decoded);
     return decoded;
+  }
+
+  /**
+   * 保存来自 renderer 的画布。
+   *
+   * 与 saveCanvas 的区别：renderer 的快照因防抖而滞后，直接落盘会抹掉
+   * 后台在这段间隙里创建的节点。这里先读磁盘再合并，只采纳 renderer 的布局。
+   * 详见 canvas-merge.ts 的说明。
+   */
+  async saveCanvasFromClient(rootPath: string, canvas: CanvasSnapshot): Promise<CanvasSnapshot> {
+    const incoming = decodeCanvas(canvas);
+    const current = decodeCanvas(JSON.parse(await readFile(join(rootPath, "canvas.json"), "utf8")));
+    return this.saveCanvas(rootPath, mergeCanvasFromClient(current, incoming));
   }
 
   async readBody(rootPath: string, bodyPath: string): Promise<string> {

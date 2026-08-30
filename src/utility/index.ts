@@ -117,7 +117,9 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
       return state;
     }
     case "project.saveCanvas":
-      return projectService.saveCanvas(payload.projectRoot, payload.canvas);
+      // 走合并路径：renderer 的快照因防抖而滞后，
+      // 直接覆盖会抹掉后台在这段间隙里新建的节点。
+      return projectService.saveCanvasFromClient(payload.projectRoot, payload.canvas);
     case "project.readBody":
       return projectService.readBody(payload.projectRoot, payload.bodyPath);
     case "project.writeBody":
