@@ -169,4 +169,80 @@ describe("the client write path goes through the merge", () => {
     const handler = /case "project\.saveCanvas":([\s\S]*?)case "/.exec(utility)?.[1] ?? "";
     expect(handler).toContain("saveCanvasFromClient");
   });
+
+  test("the client adopts the merged result instead of its own snapshot", () => {
+    // 只在服务端合并还不够：若 renderer 把本地快照推回 App state，
+    // 磁盘是对的而界面是旧的——画布和 Agent 面板都看不见新节点。
+    const workspace = readFileSync(
+      new URL("../src/renderer/src/components/canvas-workspace.tsx", import.meta.url),
+      "utf8"
+    );
+    const persistBody = /const persist = useCallback\(([\s\S]*?)\n  \);/.exec(workspace)?.[1] ?? "";
+    expect(persistBody).toContain(".then(onCanvasChange)");
+    // 修复前是先 onCanvasChange(next) 再保存，等于用旧快照覆盖界面状态。
+    expect(persistBody).not.toContain("onCanvasChange(next)");
+  });
+});
+
+describe("the deterministic failure, not just a rare race", () => {
+  /**
+   * 用户报告的现象是「每次都失败」，而竞态通常是偶发的。
+   *
+   * 原因：生成图片要十几秒，远超 260ms 防抖。这期间 React Flow 只要
+   * 测量一次节点尺寸（挂载、缩放、鼠标经过都会触发 dimensions 变更）
+   * 就会排一次保存，而它手里的列表里没有后台刚建的分镜节点。
+   * 于是「生成耗时 > 防抖窗口」就等价于「必然被覆盖」。
+   */
+  test("survives a save that lands in the middle of generating several shots", () => {
+    const script = node("script-1", { kind: "script" });
+    // 防抖开始那一刻：只有脚本节点。
+    const clientSnapshotAtDebounceStart = canvas([script]);
+
+    // 后台逐个镜头创建节点，每次都写盘。
+    let onDisk = canvas([script]);
+    for (const shotId of ["shot-1", "shot-2", "shot-3"]) {
+      onDisk = canvas(
+        [...onDisk.nodes, node(shotId)],
+        [...onDisk.edges, { id: `e-${shotId}`, source: "script-1", target: shotId }]
+      );
+    }
+
+    // 防抖到期，旧快照抵达。
+    const merged = mergeCanvasFromClient(onDisk, clientSnapshotAtDebounceStart);
+
+    // 三个镜头都还在，后续 updateNodeStatus 才找得到它们。
+    expect(merged.nodes.map((entry) => entry.id)).toEqual([
+      "script-1",
+      "shot-1",
+      "shot-2",
+      "shot-3"
+    ]);
+    expect(merged.edges).toHaveLength(3);
+  });
+
+  test("survives repeated saves during one generation run", () => {
+    // 缩放、鼠标经过都会再触发一次保存，一次生成期间可能来好几发。
+    const script = node("script-1", { kind: "script" });
+    const stale = canvas([script]);
+    let onDisk = canvas([script, node("shot-1")]);
+
+    for (let index = 0; index < 5; index += 1) {
+      onDisk = mergeCanvasFromClient(onDisk, stale);
+    }
+
+    expect(onDisk.nodes.map((entry) => entry.id)).toEqual(["script-1", "shot-1"]);
+  });
+});
+
+describe("the error message when a node really is missing", () => {
+  test("names the node and the canvas size", () => {
+    // 原文案只有「找不到要更新的节点」：既看不出是哪个节点，
+    // 也分不清是画布被覆盖了还是用户真把节点删了。
+    const service = readFileSync(
+      new URL("../src/utility/project-service.ts", import.meta.url),
+      "utf8"
+    );
+    expect(service).toContain("找不到要更新的节点 ${nodeId}");
+    expect(service).toContain("canvas.nodes.length");
+  });
 });

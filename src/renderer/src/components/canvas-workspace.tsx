@@ -126,8 +126,15 @@ function CanvasInner({ project, initialCanvas, onCanvasChange, onProjectChanged 
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         const next = snapshot(nextNodes, nextEdges, nextViewport);
-        onCanvasChange(next);
-        void window.agentApp.project.saveCanvas({ projectRoot: project.rootPath, canvas: next });
+        // 以服务端合并后的结果为准，而不是本地这份快照。
+        //
+        // 后台在防抖窗口内可能已经创建了节点（生成分镜时每个镜头一个），
+        // 本地快照并不包含它们。若直接把本地快照推回 App state，
+        // 画布与 Agent 面板都会退回到看不见这些节点的状态——
+        // 磁盘上数据是对的，界面却是旧的。
+        void window.agentApp.project
+          .saveCanvas({ projectRoot: project.rootPath, canvas: next })
+          .then(onCanvasChange);
       }, 260);
     },
     [edges, nodes, onCanvasChange, project.rootPath, snapshot, viewport]

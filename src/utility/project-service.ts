@@ -217,7 +217,15 @@ export class ProjectService {
     const canvasPath = join(rootPath, "canvas.json");
     const canvas = decodeCanvas(JSON.parse(await readFile(canvasPath, "utf8")));
     const current = canvas.nodes.find((node) => node.id === nodeId);
-    if (!current) throw new Error("找不到要更新的节点");
+    // 报错信息带上 nodeId 与画布现有节点数。
+    // 原本只说「找不到要更新的节点」，既看不出是哪个节点，
+    // 也无法区分「画布被覆盖导致节点消失」和「节点确实被用户删了」。
+    if (!current) {
+      throw new Error(
+        `找不到要更新的节点 ${nodeId}（画布当前有 ${canvas.nodes.length} 个节点）。` +
+          "若该节点刚由后台创建，可能是画布保存发生了覆盖。"
+      );
+    }
     const updated: CanvasNode = { ...current, status };
     const next: CanvasSnapshot = {
       ...canvas,
