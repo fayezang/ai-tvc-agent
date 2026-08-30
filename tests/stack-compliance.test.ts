@@ -88,4 +88,31 @@ describe("migration readiness", () => {
     expect(decision).toContain("force_original_aspect_ratio=decrease");
     expect(decision).toContain("amix=inputs=2:duration=first");
   });
+
+  test("records why project entry points are fixed at two", () => {
+    // 启动包原文要求三个入口。移除「导入已有脚本」是显式决策，
+    // 必须留档，否则会被后续 Agent 当成未完成项重新实现。
+    const decision = readFileSync(rootUrl("docs/decisions/0002-project-entry-points.md"), "utf8");
+    expect(decision).toContain("移除「导入已有脚本」入口");
+    expect(decision).toContain("脚本是唯一事实来源");
+  });
+});
+
+describe("cost estimation honesty", () => {
+  const contracts = readFileSync(new URL("../src/shared/contracts.ts", import.meta.url), "utf8");
+  const utilityIndex = readFileSync(new URL("../src/utility/index.ts", import.meta.url), "utf8");
+
+  test("prices are denominated in the currency ORZ actually bills in", () => {
+    // ORZ 按秒计费且以人民币计价。写死 USD 会让用户按错误汇率理解成本。
+    expect(contracts).toContain('currency: Schema.Literal("CNY")');
+    expect(contracts).not.toContain('Schema.Literal("USD")');
+    expect(utilityIndex).toContain('currency: "CNY"');
+  });
+
+  test("never fabricates an amount when no price table is wired up", () => {
+    // 价格表属第三批。在此之前必须返回 null 并说明原因，
+    // 而不是填一个看起来合理的数字。
+    expect(utilityIndex).toContain("amount: null");
+    expect(utilityIndex).toContain("尚未接入价格表");
+  });
 });

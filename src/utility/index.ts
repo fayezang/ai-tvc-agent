@@ -63,9 +63,11 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
     case "video.estimate":
       return {
         modelId: resolveVideoModelForRole(payload.role, request.secrets?.videoModelRouting),
-        currency: "USD",
+        currency: "CNY",
+        // 真实价格表与按秒计费逻辑属第三批范围。在此之前返回 null 而非估算值，
+        // 避免用户依据编造的数字判断成本。
         amount: null,
-        note: "ORZ 价格可能变化；提交前以 ORZ 控制台的实时计费为准。"
+        note: "尚未接入价格表；ORZ 按秒计费（人民币），提交前以 ORZ 控制台的实时计费为准。"
       };
     case "video.submit": {
       const generation = request.payload as VideoGenerationRequest;

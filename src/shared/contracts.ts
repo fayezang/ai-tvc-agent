@@ -226,7 +226,9 @@ export type VideoJob = typeof VideoJobSchema.Type;
 
 export const VideoEstimateSchema = Schema.Struct({
   modelId: Schema.String,
-  currency: Schema.Literal("USD"),
+  // ORZ 按秒计费且以人民币计价。此前写死 USD 是错的，会让用户按错误汇率理解成本。
+  currency: Schema.Literal("CNY"),
+  // 拿不到该模型该分辨率的真实报价时返回 null 并在 note 中说明，绝不猜测填数。
   amount: Schema.NullOr(Schema.Number),
   note: Schema.String
 });
