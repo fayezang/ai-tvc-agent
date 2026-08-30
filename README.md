@@ -1,3 +1,22 @@
+# AI TVC Agent（本地 MVP）
+
+这个分支把 CutAgent 改造成一条可审查、可局部修改、可追溯的 TVC 生产流程：
+
+`Brief → AI 复述确认 → 三条创意方向 → 结构化脚本 → 逐镜静态分镜 → CutAgent 视频与导出`
+
+快速启动：
+
+```bash
+pnpm install
+pnpm dev
+```
+
+打开 [localhost:3000](http://localhost:3000)。Brief、创意和脚本不需要 API Key；生成分镜或视频时，在界面中填写自己的 fal.ai Key。完整产品范围、状态规则、测试方式与安全边界见 [docs/TVC_AGENT.md](docs/TVC_AGENT.md)。
+
+本项目基于 MIT 许可的 [CutAgent](https://github.com/rishidandu/cutagent)；以下保留上游项目说明。
+
+---
+
 <p align="center">
   <img src="https://img.shields.io/badge/status-hosted%20beta-cyan?style=flat-square" alt="Hosted Beta" />
   <img src="https://img.shields.io/badge/models-8-violet?style=flat-square" alt="8 Models" />

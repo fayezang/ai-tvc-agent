@@ -1,0 +1,15 @@
+appId: com.faye.aitvcagent
+productName: AI TVC Agent
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - package.json
+asarUnpack:
+  - node_modules/better-sqlite3/**
+mac:
+  category: public.app-category.video
+  target:
+    - dmg
+    - zip

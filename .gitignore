@@ -3,20 +3,28 @@ node_modules/
 .pnp
 .pnp.js
 
-# next.js
+# build output
 .next/
-out/
-
-# build
-build/
 dist/
+out/
+build/
+*.tsbuildinfo
 
-# env
+# env — 真实密钥永不入库；ORZ API Key 存 macOS safeStorage，不落文件
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+
+# 用户项目数据与生成资产：体积大且属于用户内容，不进代码仓库
+.agent/
+assets/videos/
+assets/storyboards/
+assets/references/
+
+# 本地 Agent 记忆（跨会话上下文，非源码）
+.workbuddy/
 
 # debug
 npm-debug.log*
@@ -39,8 +47,3 @@ Thumbs.db
 # proprietary business docs (internal only)
 business/
 *.pptx
-
-# build artifacts
-tsconfig.tsbuildinfo
-.aidesigner/*
-!.aidesigner/.gitkeep

@@ -1,0 +1,11 @@
+{
+  "package": "@mariozechner/pi-agent-core",
+  "version": "0.73.1",
+  "commit": "781152fc24841dc54b22284514604048ebe5e2c9",
+  "integrity": "sha512-Y/KVOhuKSgRQgYBlwmRtO2gPkUcoavOSqGF9bpQIINvNZvc19k6Z1H3bFDTce3Vp5ApMmTsfLH3+tNvOg75fAQ==",
+  "piAi": {
+    "package": "@mariozechner/pi-ai",
+    "version": "0.73.1",
+    "integrity": "sha512-Jh4lXawZYuC83HzSIYuVum9NBqJD49i4JOt3H96cGW/924cwJMOyUs1Mv/e4QPzTXnzrqMoGviNQnvGgSu1LSg=="
+  }
+}
