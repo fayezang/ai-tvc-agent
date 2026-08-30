@@ -171,7 +171,9 @@ src/
 | `docs/decisions/0001-video-backend.md` | 为何用 ORZ 而非 CutAgent / fal.ai；ffmpeg 命令序列存档 |
 | `docs/decisions/0002-project-entry-points.md` | 为何首次进入只有两个入口 |
 | `docs/BATCH-2-KICKOFF.md` | 第二批（任务可靠性）的范围与验收 |
-| `docs/TVC_AGENT.md` | 产品范围、状态规则、安全边界 |
+| `docs/BATCH-3-KICKOFF.md` | 第三批（成本可见与提交前确认）的范围与验收 |
+| `docs/BATCH-4-KICKOFF.md` | 第四批（导出与交片）的范围与验收 —— **下一批从这里开始** |
+| `docs/TVC_AGENT.md` | 产品范围、状态规则、安全边界、已知断点 |
 
 已决策事项不要当作缺口重新实现。
 
