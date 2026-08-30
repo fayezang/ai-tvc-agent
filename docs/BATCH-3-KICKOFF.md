@@ -186,22 +186,28 @@ ALTER TABLE video_jobs ADD COLUMN pricing_fetched_at TEXT;
 - **顺手修掉硬编码**：`modelId` 走 `resolveVideoModelForRole`，`resolution` 由用户在确认卡片上可选，默认降到 `720p`（1080p 单价是 720p 的 2.2 倍，默认给最贵档不合理）。分辨率选项取自 `pricedResolutions(modelId)`，不展示估不出价的档。
 
 
-### C4 · 链路成本归集
+### C4 · 链路成本归集 ✅ 已完成
 
-`job-service.ts:205` 的 `chain()` 现在 `totalCost` 恒为 `null`。C1 落地后改为真实求和。
+`chain()` 的 `totalCost` 已改为按快照真实求和。`VideoJobChainSchema` 新增 `attemptsMissingCost`。migration `0003` 给 `video_jobs` 加 `estimate_json` / `billed_seconds` / `pricing_fetched_at` 三列（全部可空），`JobService.insert` 在提交时算一次估价并落库。
 
-要求：
+已落地的汇总规则：
 
 - 逐条尝试用**该次提交时记录的 `estimate_json` 快照**求和，不用当前价格表重算。
-- 只计入真正产出了视频的尝试（现有逻辑已正确，保留）。
-- 快照缺失的历史行（migration 前产生的）→ 那一条计 `null`，整条链的 `totalCost` 仍给出已知部分的和，并在 `costNote` 说明「N 次尝试缺少价格快照，未计入」。**不要因为一条缺失就把整个 totalCost 置 null** —— 那会让升级前有过重试的用户永远看不到金额。
+- 只计入 `completed` 的尝试。失败、取消、崩在提交前的不产生费用。
+- **计费秒数优先取快照的 `billed_seconds`，而不是 `request.duration`。** 原实现用后者，Veo 固定 8 秒而脚本要 5 秒时会少算 3 秒、少算 ¥62.21。
+- 部分尝试缺快照 → 给出已知部分的和，缺失数量记入 `attemptsMissingCost` 并在 `costNote` 说明。**只有全部产出尝试都缺快照才返回 `null`** —— 一条缺失就置 null 会让升级前有过重试的用户永远看不到金额。
+- 快照 JSON 解析失败按「缺快照」处理，不让一条格式异常的旧记录把整条链的汇总带崩。
+
+实施中发现并修掉一个 C2 遗留的缺口：**参数规范化原先只加在 `video.submit` 这个 IPC 分支上，而 `retry` 直接复用 `JobService.submit`** —— 从重试进来的请求绕过了规范化，Veo 的 5 秒重试仍会被 adapter 的 `assertModel` 拒掉。现已下移到 `JobService.submit`（所有提交路径的唯一入口）。估价快照仍按**原始请求**计算，以保证 `requestedSeconds` 是脚本真正要求的秒数而非取整结果。
+
+这个缺口是写「按实际生成秒数计费」那条测试时暴露的：直接给 `JobService.submit` 传 Veo 5 秒请求，任务根本没提交成功，汇总拿到 0 秒。
 
 ---
 
 ## 建议实施顺序
 
 ```
-C1 价格表 ✅  →  C2 estimate  →  C4 链路成本  →  C3 确认面板
+C1 价格表 ✅  →  C2 estimate ✅  →  C4 链路成本 ✅  →  C3 确认面板 ⬅ 下一步
 ```
 
 理由：
@@ -211,7 +217,15 @@ C1 价格表 ✅  →  C2 estimate  →  C4 链路成本  →  C3 确认面板
 - C4 依赖 C1 的查表，但不依赖 C3 的两步流程 —— 先跑通历史行降级路径
 - C3 跨 utility / preload / main / renderer 四处，且要改数据库与 UI，改动面最大，放最后
 
-**C1 与 C1a 已于 commit（见 git log）完成，146 项测试全绿。下一步从 C2 开始。**
+**进度：C1 / C1a（`3d9a1bc`）、C2（`5806e24`）、C4（`7185412`）已完成，166 项测试全绿，两侧 `tsc` 无错误。下一步是 C3 确认面板 —— 它是本批唯一还没落地的部分，也是「让用户在花钱前看到金额」这件事真正生效的一步。在它完成前，`video.submit` 仍然是一步付费。**
+
+C3 实施时可直接复用的现成件：
+
+- `estimateVideoCost(request)` —— 纯函数，`prepare` 阶段调用它不会产生任何网络请求
+- `pricedResolutions(modelId)` —— 确认卡片的分辨率选项，只列估得出价的档
+- `PRICING_FETCHED_AT` / `PRICING_DISCLAIMER` —— 卡片上必须展示的两项
+- `PRE_SUBMIT_VIDEO_TASK_STATES` —— 启动恢复对 `draft` / `awaiting-approval` 的豁免已备好
+- `JobService.insert` 已会写入估价快照，`prepare` 建行时无需额外处理
 
 ---
 
