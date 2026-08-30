@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import type {
+  VideoEstimate,
   VideoGenerationRequest,
   VideoJob,
   VideoJobChain,
   VideoTaskState
 } from "../shared/contracts.js";
+import { estimateVideoCost, normalizeVideoParams } from "../shared/video-estimate.js";
 import { isTerminalVideoTaskState } from "../shared/video-task-states.js";
 import { triageDanglingJobs, type TriageResult } from "./job-recovery.js";
 import { OrzClient, type OrzTaskResponse } from "./providers/orz-client.js";
@@ -28,6 +30,9 @@ interface JobRow {
   parent_job_id: string | null;
   root_job_id: string | null;
   attempt: number;
+  estimate_json: string | null;
+  billed_seconds: number | null;
+  pricing_fetched_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -81,6 +86,24 @@ const rowToJob = (row: JobRow): VideoJob => {
 };
 
 /**
+ * 读回提交时的估价快照。
+ *
+ * 快照是历史事实，可能来自任意早期版本的价格表，因此这里只做宽松校验：
+ * 拿不到可信的 amount 就返回 null，交由调用方按「缺快照」处理，
+ * 绝不因为一条格式异常的旧记录让整条链的汇总崩掉。
+ */
+const parseEstimateSnapshot = (raw: string | null): VideoEstimate | null => {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<VideoEstimate>;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    return parsed as VideoEstimate;
+  } catch {
+    return null;
+  }
+};
+
+/**
  * JobService 需要的最小 SQLite 接口。
  *
  * 与 migrations.ts 的 MigrationRunnerDatabase 同理：生产环境用
@@ -123,10 +146,20 @@ export class JobService {
   }
 
   async submit(
-    request: VideoGenerationRequest,
+    incoming: VideoGenerationRequest,
     apiKey: string,
     lineage?: { parentJobId: string; rootJobId: string; attempt: number }
   ): Promise<VideoJob> {
+    // 规范化放在这里，因为 submit 是所有提交路径的唯一入口（retry 也复用它）。
+    // 放在调用方会漏：未规范化的请求会被 adapter 的 assertModel 拒掉，
+    // 而估价却已按规范化后的参数报了价 —— 用户看到的价必须是真能提交的那一档。
+    const normalized = normalizeVideoParams(incoming);
+    const request: VideoGenerationRequest = {
+      ...incoming,
+      duration: normalized.duration,
+      resolution: normalized.resolution,
+      aspectRatio: normalized.aspectRatio
+    };
     const adapter = resolveOrzAdapter(request.modelId);
     const now = new Date().toISOString();
     const id = randomUUID();
@@ -148,7 +181,7 @@ export class JobService {
       error: null,
       createdAt: now,
       updatedAt: now
-    }, request);
+    }, request, incoming);
     try {
       const task = await this.client(apiKey).submitVideo(adapter.build(request));
       return await this.updateFromProvider(request.projectRoot, id, task);
@@ -217,24 +250,57 @@ export class JobService {
 
     const attempts = rows.map(rowToJob);
     // 只计入真正产出了视频的尝试。提交失败、被取消、或崩在提交前的尝试
-    // 不产生计费秒数，把它们算进去会虚高整条链的用量。
-    const totalBilledSeconds = rows.reduce((total, current) => {
-      if (current.state !== "completed") return total;
-      const request = JSON.parse(current.request_json) as Partial<VideoGenerationRequest>;
-      return total + (typeof request.duration === "number" ? request.duration : 0);
-    }, 0);
+    // 不产生费用，把它们算进去会虚高整条链的账。
+    const billedRows = rows.filter((current) => current.state === "completed");
+
+    let totalBilledSeconds = 0;
+    let knownCost = 0;
+    let attemptsMissingCost = 0;
+    let hasAnyCost = false;
+
+    for (const current of billedRows) {
+      // 计费秒数优先取快照的 billed_seconds：模型只有离散时长档时，
+      // 实际生成（并计费）的秒数大于脚本时长。Veo 固定 8 秒而脚本要 5 秒，
+      // 按 request.duration 汇总会少算 3 秒。
+      if (typeof current.billed_seconds === "number") {
+        totalBilledSeconds += current.billed_seconds;
+      } else {
+        const request = JSON.parse(current.request_json) as Partial<VideoGenerationRequest>;
+        totalBilledSeconds += typeof request.duration === "number" ? request.duration : 0;
+      }
+
+      const snapshot = parseEstimateSnapshot(current.estimate_json);
+      if (snapshot?.amount != null) {
+        knownCost += snapshot.amount;
+        hasAnyCost = true;
+      } else {
+        // 升级前产生的行没有快照，或该模型该分辨率当时就没有报价。
+        // 两种情况都不回填猜测值，只计数并在说明里点明。
+        attemptsMissingCost += 1;
+      }
+    }
+
+    // 一条缺失不该让整个金额消失 —— 那会让升级前有过重试的用户
+    // 永远看不到任何金额。只有全部产出尝试都缺快照时才返回 null。
+    const totalCost = hasAnyCost ? Math.round(knownCost * 100) / 100 : null;
+
+    const missingNote =
+      attemptsMissingCost > 0
+        ? `其中 ${attemptsMissingCost} 次尝试缺少价格快照，未计入金额。`
+        : "";
 
     return {
       rootJobId,
       attempts,
       totalBilledSeconds,
       currency: "CNY",
-      // 价格表属第三批。在它接入之前返回 null 而非估算值——
-      // 按猜测的单价给出金额，比不给金额更糟。
-      totalCost: null,
+      totalCost,
+      attemptsMissingCost,
       costNote:
-        `整条链共 ${attempts.length} 次尝试，其中 ${rows.filter((current) => current.state === "completed").length} 次成功产出，` +
-        `累计计费时长 ${totalBilledSeconds} 秒。ORZ 按秒计价（人民币），单价表尚未接入，具体金额以 ORZ 控制台为准。`
+        `整条链共 ${attempts.length} 次尝试，其中 ${billedRows.length} 次成功产出，` +
+        `累计计费时长 ${totalBilledSeconds} 秒，` +
+        `${totalCost === null ? "无可用金额快照" : `累计约 ¥${totalCost}`}。` +
+        `${missingNote}金额按各次提交时的估价快照汇总，以 ORZ 控制台实时计费为准。`
     };
   }
 
@@ -423,14 +489,27 @@ export class JobService {
     });
   }
 
-  private insert(projectRoot: string, job: VideoJob, request: VideoGenerationRequest): void {
+  private insert(
+    projectRoot: string,
+    job: VideoJob,
+    request: VideoGenerationRequest,
+    originalRequest: VideoGenerationRequest = request
+  ): void {
+    // 估价在插入时算一次并存成快照。价格表随时会变，事后用当前单价重算
+    // 历史任务会失真 —— 用户当时看到并批准的那个金额才是该保留的事实。
+    //
+    // 传原始请求而非规范化后的：estimateVideoCost 内部会自己规范化，
+    // 这样 requestedSeconds 才是脚本真正要求的秒数，而不是取整后的结果。
+    const estimate = estimateVideoCost(originalRequest);
     const db = this.open(projectRoot);
     db.prepare(`
       INSERT INTO video_jobs (
         id, provider_task_id, model_id, state, progress, stage, output_urls_json,
         local_paths_json, shot_id, request_json, error_json,
-        parent_job_id, root_job_id, attempt, created_at, updated_at, revision
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        parent_job_id, root_job_id, attempt,
+        estimate_json, billed_seconds, pricing_fetched_at,
+        created_at, updated_at, revision
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
     `).run(
       job.id,
       job.providerTaskId,
@@ -446,6 +525,9 @@ export class JobService {
       job.parentJobId,
       job.rootJobId,
       job.attempt,
+      JSON.stringify(estimate),
+      estimate.billedSeconds,
+      estimate.pricingFetchedAt,
       job.createdAt,
       job.updatedAt
     );

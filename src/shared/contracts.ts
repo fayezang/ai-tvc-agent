@@ -233,16 +233,21 @@ export const VideoJobChainSchema = Schema.Struct({
   rootJobId: Schema.String,
   /** 按 attempt 升序排列的全部尝试。 */
   attempts: Schema.Array(VideoJobSchema),
-  /**
-   * 整条链累计的计费秒数。
-   *
-   * ORZ 按秒计费，秒数是我们能真实核算的量。金额需要价格表（第三批），
-   * 在那之前 totalCost 保持 null——按错误汇率或猜测的单价给出金额，
-   * 比不给更糟。
-   */
+  /** 整条链累计的计费秒数。ORZ 按秒计费，秒数是能真实核算的量。 */
   totalBilledSeconds: Schema.Number,
   currency: Schema.Literal("CNY"),
+  /**
+   * 整条链累计金额，按各次尝试**提交时的估价快照**求和。
+   *
+   * 不用当前价格表重算 —— 价格会变，拿今天的单价去算三个月前的任务，
+   * 得出的是一个从未发生过的数字。
+   *
+   * 全部产出尝试都缺快照时为 null；部分缺失则给出已知部分的和，
+   * 缺失数量记入 attemptsMissingCost 并在 costNote 说明。
+   */
   totalCost: Schema.NullOr(Schema.Number),
+  /** 缺少估价快照、未计入 totalCost 的尝试数（升级前产生的行）。 */
+  attemptsMissingCost: Schema.Number,
   costNote: Schema.String
 });
 export type VideoJobChain = typeof VideoJobChainSchema.Type;

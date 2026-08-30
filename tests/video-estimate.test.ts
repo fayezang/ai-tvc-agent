@@ -191,12 +191,20 @@ describe("video cost estimation", () => {
   test("submits exactly the parameters it quoted", () => {
     // 报价与提交必须共用同一套规范化。否则会出现「按 8 秒报了价，
     // 却拿 5 秒去提交」，被 Adapter 的 assertModel 直接拒掉。
-    const utility = readFileSync(new URL("../src/utility/index.ts", import.meta.url), "utf8");
-    expect(utility).toContain("normalizeVideoParams({ ...generation, modelId })");
-    expect(utility).toContain("duration: normalized.duration");
-    expect(utility).toContain("resolution: normalized.resolution");
-    expect(utility).toContain("aspectRatio: normalized.aspectRatio");
+    //
+    // 规范化落在 JobService.submit —— 它是所有提交路径的唯一入口，
+    // retry 也复用它。放在 IPC 分支那层会漏掉从 retry 进来的请求。
+    const jobService = readFileSync(
+      new URL("../src/utility/job-service.ts", import.meta.url),
+      "utf8"
+    );
+    expect(jobService).toContain("normalizeVideoParams(incoming)");
+    expect(jobService).toContain("duration: normalized.duration");
+    expect(jobService).toContain("resolution: normalized.resolution");
+    expect(jobService).toContain("aspectRatio: normalized.aspectRatio");
+
     // 旧的占位实现必须彻底消失。
+    const utility = readFileSync(new URL("../src/utility/index.ts", import.meta.url), "utf8");
     expect(utility).not.toContain("尚未接入价格表");
   });
 });

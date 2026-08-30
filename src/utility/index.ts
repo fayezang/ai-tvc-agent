@@ -1,5 +1,5 @@
 import { MODEL_DEFINITIONS, resolveVideoModelForRole } from "../shared/orz-models.js";
-import { estimateVideoCost, normalizeVideoParams } from "../shared/video-estimate.js";
+import { estimateVideoCost } from "../shared/video-estimate.js";
 import type { ProviderVideoRouting, VideoGenerationRequest, VideoJob } from "../shared/contracts.js";
 import { AgentService } from "./agent-service.js";
 import { JobService } from "./job-service.js";
@@ -144,17 +144,12 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
     }
     case "video.submit": {
       const generation = request.payload as VideoGenerationRequest;
-      // 与 video.estimate 共用同一套规范化，否则会出现「报了价却提交失败」：
-      // 例如 Veo 只有 8 秒档，估价按 8 秒报，而未规范化的 5 秒请求会被
-      // Adapter 的 assertModel 直接拒掉。用户看到的价必须是真能提交的那一档。
-      const modelId = resolveVideoModelForRole(generation.role, request.secrets?.videoModelRouting);
-      const normalized = normalizeVideoParams({ ...generation, modelId });
+      // 模型由角色路由决定，不采用调用方自带的 modelId。
+      // 参数规范化由 JobService.submit 统一负责 —— 它是所有提交路径的唯一
+      // 入口（retry 也复用它），在那里做才不会漏。
       const configuredRequest: VideoGenerationRequest = {
         ...generation,
-        modelId,
-        duration: normalized.duration,
-        resolution: normalized.resolution,
-        aspectRatio: normalized.aspectRatio
+        modelId: resolveVideoModelForRole(generation.role, request.secrets?.videoModelRouting)
       };
       const apiKey = requireApiKey(request);
       const job = await jobService.submit(configuredRequest, apiKey);

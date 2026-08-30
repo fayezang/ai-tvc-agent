@@ -26,6 +26,12 @@ export const videoJobs = sqliteTable("video_jobs", {
   /** 整条重试链共享的根任务 id。 */
   rootJobId: text("root_job_id"),
   attempt: integer("attempt").notNull().default(1),
+  /** 提交时的估价快照。价格会变，事后重算会失真，因此存快照而非引用。 */
+  estimateJson: text("estimate_json"),
+  /** 快照中的计费秒数，单独成列以便按链汇总时无需反序列化。 */
+  billedSeconds: integer("billed_seconds"),
+  /** 该快照所用价格表的抓取日期。 */
+  pricingFetchedAt: text("pricing_fetched_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
   revision: integer("revision").notNull().default(0)

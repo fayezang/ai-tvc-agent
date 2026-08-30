@@ -84,7 +84,12 @@ describe("schema migrations", () => {
         // 用户看到两条孤立记录，无法知道哪次是哪次的重试。
         "parent_job_id",
         "root_job_id",
-        "attempt"
+        "attempt",
+        // 0003 追加：提交时的估价快照。价格会变，事后用当前单价重算
+        // 历史任务会得出一个从未发生过的数字。
+        "estimate_json",
+        "billed_seconds",
+        "pricing_fetched_at"
       ]);
       expect(columns("indexed_nodes")).toEqual(["id", "kind", "title", "body_path", "updated_at"]);
     });

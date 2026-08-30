@@ -79,6 +79,20 @@ export const migrations: readonly Migration[] = [
       UPDATE video_jobs SET root_job_id = id WHERE root_job_id IS NULL;
       CREATE INDEX IF NOT EXISTS idx_video_jobs_root ON video_jobs (root_job_id);
     `
+  },
+  {
+    id: "0003_video_estimate_snapshot",
+    description: "提交时的估价快照：金额、计费秒数与价格抓取日期",
+    sql: `
+      -- 快照而非引用：价格表随时会变，事后用当前单价重算历史任务会失真。
+      -- 用户当时看到并批准的那个金额，才是这条记录应该永久保留的事实。
+      --
+      -- 三列全部可空。升级前产生的行没有快照，chain() 会把它们单独计数
+      -- 并在说明中列出，而不是回填一个编造的金额。
+      ALTER TABLE video_jobs ADD COLUMN estimate_json TEXT;
+      ALTER TABLE video_jobs ADD COLUMN billed_seconds INTEGER;
+      ALTER TABLE video_jobs ADD COLUMN pricing_fetched_at TEXT;
+    `
   }
 ];
 

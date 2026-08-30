@@ -122,11 +122,22 @@ export const lookupVideoPrice = (
 已从以下位置摘除：`orz-models.ts` 的 `ORZ_MODELS` 与 `MODEL_DEFINITIONS`、`orz-adapters.ts` 的 `HailuoAdapter` 与 registry、`tests/orz-adapters.test.ts` 三处引用。新增回归测试 `no longer ships Hailuo 2.3 in any layer` 守住它不被重新引入。
 
 
-### C2 · estimate 落地真实金额
+### C2 · estimate 落地真实金额 ✅ 已完成
 
-改 `utility/index.ts:135` 的 `video.estimate` 分支。
+新建 `src/shared/video-estimate.ts`（纯函数，不发网络请求），接入 `utility/index.ts` 的 `video.estimate` 分支。测试 `tests/video-estimate.test.ts`，13 项。
 
-`VideoEstimateSchema` 现有 `{ modelId, currency, amount, note }` 四个字段，不够表达确认面板需要的信息。扩展为：
+模块分两层：`normalizeVideoParams` 把请求对齐到模型能力并记录每处调整，`estimateVideoCost` 用单价 × **实际计费秒数** 算钱、取整到分。`VideoEstimate` 类型由 `contracts.ts` 的 Schema 单向推导，估价模块不自建重复接口。
+
+`adjustments` 已覆盖：Veo 8 秒计费（`billedSeconds` 8 / `requestedSeconds` 5 / ¥165.89）、离散档位取不短于脚本时长的最小档（Kling 7 秒 → 10 秒档）、无档够长时退回最长档并提示「请拆分该镜头」、Seedance 4–15 秒边界收敛、分辨率**只降不升**、画幅降级、Kling/Veo 带参考图追加「折扣价未收录」。
+
+实施中另外发现并修掉两个问题：
+
+1. **金额浮点尾数。** `2.88 × 15` 在 IEEE 754 下是 `43.199999999999996`，`2.16 × 15` 是 `32.400000000000006`。已统一取整到分。
+2. **报价与提交参数不一致。** `video.submit` 此前用未规范化的原始请求，而 `estimate` 会规范化 —— Veo 的 5 秒请求被报成 8 秒的价，提交时却被 Adapter 的 `assertModel` 以「不支持 5 秒时长」拒掉。现已共用 `normalizeVideoParams`，测试 `submits exactly the parameters it quoted` 守住。
+
+`tests/stack-compliance.test.ts` 中两条守「价格表未接入时不许编数字」的旧断言前提已消失，改为守新不变量：金额全链路可空、返回 null 必须给原因、金额与抓取日期必须同现、计费秒数与脚本秒数不得混谈。
+
+已落地的 Schema 形状：
 
 ```ts
 export const VideoEstimateSchema = Schema.Struct({
@@ -134,26 +145,14 @@ export const VideoEstimateSchema = Schema.Struct({
   currency: Schema.Literal("CNY"),
   amount: Schema.NullOr(Schema.Number),
   amountPerSecond: Schema.NullOr(Schema.Number),
-  /** 实际计费秒数。与脚本镜头时长可能不同，见 C3 的 trim 说明。 */
   billedSeconds: Schema.Number,
-  /** 脚本要求的镜头时长。billedSeconds 大于它时说明发生了向上取整。 */
   requestedSeconds: Schema.Number,
-  /** 是否走了参考图折扣价。 */
   discounted: Schema.Boolean,
-  /** 模型能力与请求不符时的降级说明，逐条列出，供确认面板直接展示。 */
   adjustments: Schema.Array(Schema.String),
   pricingFetchedAt: Schema.String,
   note: Schema.String
 });
 ```
-
-`adjustments` 必须覆盖规范 §3.5 要求「自动模式必须输出：选择了什么模型、原因、预计成本、时长取整或画幅降级」中的后两项。至少这些情形要产出一条：
-
-- Veo 3.1 固定 8 秒，脚本镜头 5 秒 → `"Veo 3.1 时长固定 8 秒，将生成 8 秒后裁剪至 5 秒；计费按 8 秒计"`
-- 请求分辨率不在 `MODEL_DEFINITIONS.resolutions` 内 → 说明降级到哪一档
-- 请求画幅不在 `aspectRatios` 内 → 说明降级到哪一档
-
-**Veo 这条是本批最容易被漏掉、也最伤用户信任的一条**：用户以为在付 5 秒的钱，实际按 8 秒计费，差 ¥62.2。
 
 ### C3 · 提交前确认面板
 
