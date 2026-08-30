@@ -405,8 +405,13 @@ const projectReferenceImageUrls = async (
   return urls;
 };
 
-/** 把项目内的本地图片换成 ORZ 可访问的真实 URL，并按内容哈希缓存避免重复上传计费。 */
-const uploadLocalImage = async (
+/**
+ * 把项目内的本地图片换成 ORZ 可访问的真实 URL，并按内容哈希缓存避免重复上传计费。
+ *
+ * 缓存键是**文件内容的 sha256**，不是路径 —— 同一张图换个文件名不该重传，
+ * 而路径相同但内容变了必须重传。上传本身在 ORZ 侧计费，重复上传等于白花钱。
+ */
+export const uploadLocalImage = async (
   projectRoot: string,
   relativePath: string,
   client: OrzClient

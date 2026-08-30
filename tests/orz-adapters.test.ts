@@ -51,13 +51,19 @@ describe("ORZ Provider Adapter Registry", () => {
   test("never sends base64 data URLs as ORZ reference images", () => {
     // ORZ 文档明确：image_url / image_urls 只接受公网 HTTPS、cdn.orz.sh 或 file:// 引用，
     // 传 base64 data URL 会被判为 image_invalid。参考图必须先经 Files API 换成真实 URL。
+    //
+    // 上传与缓存的真实行为由 tests/reference-upload-cache.test.ts 覆盖（真实 HTTP，
+    // 含「只给 file id 时退回 file:// 而非 data:」）。这里只守住不该存在的旁路 ——
+    // 一个东西的「不存在」没法用行为测试证明，只能扫源码。
+    //
+    // 注意不能笼统地禁 "data:"：agent-service 里的 dataUrlFromRelativePath 用
+    // data URL 给 Renderer 传预览图，那是合法用途，与发给 ORZ 的参考图无关。
     const service = readFileSync(
       new URL("../src/utility/agent-service.ts", import.meta.url),
       "utf8"
     );
     expect(service).not.toContain("projectReferenceDataUrls");
-    expect(service).toContain("client.uploadFile(name, bytes, mimeType)");
-    expect(service).toContain("referenceImageUrls: projectReferences");
+    expect(service).not.toMatch(/referenceImageUrls:[^\n]*dataUrl/);
     // 图片链路必须独立于文本链路验证。
     const credentials = readFileSync(
       new URL("../src/main/credential-store.ts", import.meta.url),
