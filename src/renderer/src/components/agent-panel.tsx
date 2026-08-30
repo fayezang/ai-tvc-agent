@@ -245,15 +245,9 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
     setDirectionSupplement("");
   }, [workflowState?.creative?.nodeId]);
 
-  useEffect(() => {
-    if (!videoJob || isTerminalVideoTaskState(videoJob.state)) return;
-    const timer = window.setInterval(() => {
-      void window.agentApp.video.getJob(videoJob.id)
-        .then(setVideoJob)
-        .catch((error: unknown) => setWorkflowError(cleanRemoteError(error)));
-    }, 3000);
-    return () => window.clearInterval(timer);
-  }, [videoJob]);
+  // 视频任务状态由 Utility Process 的 JobPoller 主动推送（video-job 事件）。
+  // 此前这里有一个 setInterval：每 3 秒固定轮询，且随组件卸载而停止——
+  // 任务在服务端继续跑，本地却不再跟踪。轮询下沉后本组件只负责接收。
 
   const runtime = useExternalStoreRuntime({
     messages,
@@ -799,7 +793,7 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
             </p>
             <Button
               className="mt-3 w-full"
-              disabled={isRunning || !videoPromptDraft.trim() || videoJob?.state === "queued" || videoJob?.state === "generating"}
+              disabled={isRunning || !videoPromptDraft.trim() || (videoJob !== null && !isTerminalVideoTaskState(videoJob.state))}
               onClick={() => void submitFullVideo()}
             >
               {workflowBusy === "video-submit" ? <LoaderCircle className="size-4 animate-spin" /> : <Film className="size-4" />}
@@ -808,6 +802,9 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
             {videoJob ? (
               <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2.5 text-xs leading-5 text-[var(--muted)]">
                 <p>视频任务：{videoJob.state}{videoJob.progress === null ? "" : ` · ${Math.round(videoJob.progress * 100)}%`}</p>
+                {/* stage 是中文的阶段描述。恢复与落盘阶段全靠它说明当前在做什么，
+                    否则用户只会看到 recovering / downloading 这样的英文状态码。 */}
+                {videoJob.stage ? <p>{videoJob.stage}</p> : null}
                 {videoJob.error?.message ? <p className="text-[var(--danger)]">{videoJob.error.message}</p> : null}
                 {videoJob.outputUrls[0] ? (
                   <video className="mt-2 w-full rounded-lg" src={videoJob.outputUrls[0]} controls />

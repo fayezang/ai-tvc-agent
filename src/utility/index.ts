@@ -1,7 +1,8 @@
 import { MODEL_DEFINITIONS, resolveVideoModelForRole } from "../shared/orz-models.js";
-import type { ProviderVideoRouting, VideoGenerationRequest } from "../shared/contracts.js";
+import type { ProviderVideoRouting, VideoGenerationRequest, VideoJob } from "../shared/contracts.js";
 import { AgentService } from "./agent-service.js";
 import { JobService } from "./job-service.js";
+import { JobPoller } from "./job-poller.js";
 import { ProjectService } from "./project-service.js";
 
 interface UtilityRequest {
@@ -39,6 +40,48 @@ const requireApiKey = (request: UtilityRequest): string => {
   return apiKey;
 };
 
+const emitEvent = (event: unknown): void => parentPort.postMessage({ type: "event", event });
+
+const emitJob = (job: VideoJob): void => emitEvent({ type: "video-job", job });
+
+/**
+ * 轮询在 Utility Process 内进行，因此与窗口生命周期无关：
+ * 用户关掉面板甚至关掉窗口，任务仍被持续跟踪，重新打开即看到最新状态。
+ *
+ * API Key 在 track 时捕获而非每次轮询重新索取：轮询是后台行为，
+ * 拿不到当次请求的 secrets。Key 变更后新提交的任务会用新的 Key。
+ */
+const createPoller = (apiKey: string): JobPoller =>
+  new JobPoller({
+    refresh: (projectRoot, jobId) => jobService.refresh(projectRoot, jobId, apiKey),
+    emit: emitJob,
+    onError: (jobId, error) =>
+      emitEvent({
+        type: "agent-error",
+        requestId: `poll-${jobId}`,
+        message: `查询视频任务状态失败：${error instanceof Error ? error.message : "未知错误"}`
+      })
+  });
+
+/**
+ * 每个 API Key 一个轮询器实例，避免 Key 变更后旧任务继续用失效的 Key 查询。
+ * 实际使用中通常只有一个 Key，因此这个 Map 几乎总是只有一项。
+ */
+const pollers = new Map<string, JobPoller>();
+
+const pollerFor = (apiKey: string): JobPoller => {
+  const existing = pollers.get(apiKey);
+  if (existing) return existing;
+  const poller = createPoller(apiKey);
+  pollers.set(apiKey, poller);
+  return poller;
+};
+
+const trackJob = (apiKey: string | null, projectRoot: string, job: VideoJob): VideoJob => {
+  if (apiKey) pollerFor(apiKey).track(projectRoot, job);
+  return job;
+};
+
 const handle = async (request: UtilityRequest): Promise<unknown> => {
   const payload = request.payload as Record<string, any>;
   switch (request.method) {
@@ -46,6 +89,7 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
       return projectService.create(payload.parentPath, payload.input);
     case "project.open": {
       const state = await projectService.open(payload.rootPath);
+      const apiKey = request.secrets?.apiKey ?? null;
       // 打开项目时把上次运行遗留的悬空任务重新纳入跟踪。
       //
       // 不 await：恢复要向 ORZ 逐个查询，慢的话会把打开项目这个动作
@@ -55,19 +99,19 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
       // 没有 API Key 时依然要跑：分诊会把悬空任务标为 interrupted，
       // 用户至少能看见它们，而不是对着一个永远停在 generating 的界面。
       void jobService
-        .recoverInterrupted(payload.rootPath, request.secrets?.apiKey ?? null, (job) =>
-          parentPort.postMessage({ type: "event", event: { type: "video-job", job } })
-        )
+        .recoverInterrupted(payload.rootPath, apiKey, emitJob)
+        .then((result) => {
+          // 恢复后仍未结束的任务交给轮询器，否则它们只会被查这一次，
+          // 然后再次失联到下一次启动。
+          for (const job of result.recovered) trackJob(apiKey, payload.rootPath, job);
+        })
         .catch((error: unknown) => {
-          parentPort.postMessage({
-            type: "event",
-            event: {
-              type: "agent-error",
-              requestId: request.id,
-              message: `恢复上次未完成的视频任务时出错：${
-                error instanceof Error ? error.message : "未知错误"
-              }`
-            }
+          emitEvent({
+            type: "agent-error",
+            requestId: request.id,
+            message: `恢复上次未完成的视频任务时出错：${
+              error instanceof Error ? error.message : "未知错误"
+            }`
           });
         });
       return state;
@@ -101,14 +145,25 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
         ...generation,
         modelId: resolveVideoModelForRole(generation.role, request.secrets?.videoModelRouting)
       };
-      return jobService.submit(configuredRequest, requireApiKey(request));
+      const apiKey = requireApiKey(request);
+      const job = await jobService.submit(configuredRequest, apiKey);
+      // 交给轮询器接管。renderer 不再自己起 setInterval，
+      // 因此关闭面板或窗口都不会中断跟踪。
+      return trackJob(apiKey, configuredRequest.projectRoot, job);
     }
     case "video.getJob":
       return jobService.refresh(payload.projectRoot, payload.jobId, requireApiKey(request));
-    case "video.cancel":
-      return jobService.cancel(payload.projectRoot, payload.jobId, requireApiKey(request));
-    case "video.retry":
-      return jobService.retry(payload.projectRoot, payload.jobId, requireApiKey(request));
+    case "video.cancel": {
+      const job = await jobService.cancel(payload.projectRoot, payload.jobId, requireApiKey(request));
+      // 已取消的任务不必再查。留着只会白白消耗请求配额。
+      for (const poller of pollers.values()) poller.stop(payload.jobId);
+      return job;
+    }
+    case "video.retry": {
+      const apiKey = requireApiKey(request);
+      const job = await jobService.retry(payload.projectRoot, payload.jobId, apiKey);
+      return trackJob(apiKey, payload.projectRoot, job);
+    }
     case "video.selectVariant":
       return jobService.selectVariant(payload.projectRoot, payload.jobId, payload.outputUrl);
     case "video.renderProject":
@@ -222,6 +277,11 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
       throw new Error(`未知 Utility 方法：${request.method}`);
   }
 };
+
+// 进程退出前停掉全部轮询，避免留下悬空定时器让进程迟迟不退出。
+process.on("exit", () => {
+  for (const poller of pollers.values()) poller.stopAll();
+});
 
 parentPort.on("message", (event: ParentPortMessageEvent) => {
   const request = event.data;

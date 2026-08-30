@@ -92,9 +92,9 @@ describe("single source of truth", () => {
   test("the state machine module stays dependency-free", () => {
     // renderer 需要在运行时判断状态。若本模块导入 effect，
     // 整个 Schema 运行时会被打进 renderer 包。
-    const module = source("src/shared/video-task-states.ts");
-    expect(module).not.toContain("from \"effect\"");
-    expect(module).not.toContain("import ");
+    const stateMachine = source("src/shared/video-task-states.ts");
+    expect(stateMachine).not.toContain("from \"effect\"");
+    expect(stateMachine).not.toContain("import ");
   });
 });
 
