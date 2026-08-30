@@ -265,7 +265,6 @@ C1 价格表 ✅  →  C2 estimate ✅  →  C4 链路成本 ✅  →  C3 确认
 ## 环境
 
 - Electron 真实代码仅在 `src/main` / `preload` / `renderer` / `shared` / `utility`。
-- 远程仓库 `https://github.com/fayezang/ai-tvc-agent.git`。
-  **推送需要凭据，但钥匙串里当前没有** —— `security find-internet-password -s github.com`
-  查无此项，`git push` 会报 `could not read Username`。需要装 `gh` 登录或配 PAT。
+- 远程仓库 `https://github.com/fayezang/ai-tvc-agent.git`，
+  凭据（PAT）已存 macOS 钥匙串，`credential.helper = osxkeychain`，推送免密。
 - `AgentUiEventSchema` 每新增成员，`src/preload/index.ts` 的 `AGENT_EVENT_TYPES` 白名单必须同步，否则事件被静默丢弃。
