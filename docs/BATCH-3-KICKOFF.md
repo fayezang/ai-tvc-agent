@@ -154,7 +154,27 @@ export const VideoEstimateSchema = Schema.Struct({
 });
 ```
 
-### C3 · 提交前确认面板
+### C3 · 提交前确认面板 ✅ 已完成
+
+已实现（commit `69c3626`），测试 `tests/submit-confirmation.test.ts`，6 项。
+
+```
+video.prepare(request)   → 建 awaiting-approval 行 → 校验与估价 → 返回 { job, estimate }，零网络请求
+video.approve(jobId)     → 只接受 awaiting-approval 态 → 调 ORZ → 进 uploading
+video.discard(jobId)     → 置 canceled，零网络请求
+```
+
+落地要点：
+
+- `prepare` 不要求 API Key —— 用户应能在配置 Key 之前就看到这一镜要花多少钱。
+- `approve` 只带 `jobId`，提交时用 `prepare` 落库的那份请求，用户批准后参数不可再改。
+- 状态检查同时挡住重复点击确认的重复计费，以及对已在跑的任务再次提交。
+- **重试走同一条确认路径**。`retry` 建 `awaiting-approval` 行返回估价，实际提交仍由 `approve` 完成。`maxAttempt` 计入待确认行，连开两个待确认重试不撞号（有测试）。
+- `awaiting-approval` 已被 `PRE_SUBMIT_VIDEO_TASK_STATES` 豁免，启动恢复不会把它当悬空任务（有测试）。
+- UI：原「确认并生成视频」按钮改为「查看报价」→ 确认卡片 →「确认支付并生成」/「放弃，不产生费用」。卡片展示模型、分辨率、计费秒数、单价、总额、`pricingFetchedAt`、全部 `adjustments` 与免责说明。金额无法估算时禁用「确认支付」。
+- **硬编码已修**：`modelId` 取 `provider.status` 的 CTA 路由（原先写死 `bytedance/seedance-2`），`resolution` 默认 `720p`（原先写死 `1080p`，那是 720p 的 2.2 倍价），选项取自 `pricedResolutions()`。改动 Prompt 会作废旧报价。
+
+原始规格（保留备查）：
 
 把 `video.submit` 一步付费拆成两步 IPC：
 
@@ -207,7 +227,7 @@ ALTER TABLE video_jobs ADD COLUMN pricing_fetched_at TEXT;
 ## 建议实施顺序
 
 ```
-C1 价格表 ✅  →  C2 estimate ✅  →  C4 链路成本 ✅  →  C3 确认面板 ⬅ 下一步
+C1 价格表 ✅  →  C2 estimate ✅  →  C4 链路成本 ✅  →  C3 确认面板 ✅
 ```
 
 理由：
@@ -217,15 +237,11 @@ C1 价格表 ✅  →  C2 estimate ✅  →  C4 链路成本 ✅  →  C3 确认
 - C4 依赖 C1 的查表，但不依赖 C3 的两步流程 —— 先跑通历史行降级路径
 - C3 跨 utility / preload / main / renderer 四处，且要改数据库与 UI，改动面最大，放最后
 
-**进度：C1 / C1a（`3d9a1bc`）、C2（`5806e24`）、C4（`7185412`）已完成，166 项测试全绿，两侧 `tsc` 无错误。下一步是 C3 确认面板 —— 它是本批唯一还没落地的部分，也是「让用户在花钱前看到金额」这件事真正生效的一步。在它完成前，`video.submit` 仍然是一步付费。**
+**第三批四项全部完成**：C1（`3d9a1bc`）、C2（`5806e24`）、C4（`7185412`）、C3（`69c3626`）、移除 Veo（`0476b3f`）。171 项测试全绿，两侧 `tsc` 无错误。
 
-C3 实施时可直接复用的现成件：
+自 `69c3626` 起，**花钱变成两步决策**：点「查看报价」只算钱不花钱，看到金额后才决定要不要「确认支付并生成」。
 
-- `estimateVideoCost(request)` —— 纯函数，`prepare` 阶段调用它不会产生任何网络请求
-- `pricedResolutions(modelId)` —— 确认卡片的分辨率选项，只列估得出价的档
-- `PRICING_FETCHED_AT` / `PRICING_DISCLAIMER` —— 卡片上必须展示的两项
-- `PRE_SUBMIT_VIDEO_TASK_STATES` —— 启动恢复对 `draft` / `awaiting-approval` 的豁免已备好
-- `JobService.insert` 已会写入估价快照，`prepare` 建行时无需额外处理
+遗留的一处技术债：`JobService.retry` 保留了带 `apiKey` 的 `@deprecated` 重载，仅供第二批测试兼容，Renderer/IPC 不得使用。下一步做第四批时可连同相关测试一并删除。
 
 ---
 
