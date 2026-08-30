@@ -99,9 +99,12 @@ Notion 规范 §3.3 列了四个，但 `google/veo-3-1`（commit `0476b3f`）与
 | 导出未实现 | `video.renderProject` 抛错占位；ffmpeg-static / ffprobe-static 未装 |
 | 音频链路为空 | `audio` 节点可创建，但 `ORZ_MODELS` 无任何 TTS / 音乐模型，建完不会发生任何事 |
 | trim 未实现 | 规范 §3.5 要求用 `trimStart` / `trimEnd` 把模型素材裁到脚本时长 |
-| 参考图重复上传 | 规范 §3.2 要求按 sha256 缓存，当前每次提交都重传 |
 | 上游改动不失效下游 | 规范 §2.7 的 `stale` 标记零实现 |
 | 无撤销 | 规范 §2.7 的 ProjectCommand 事务零实现（`agent_transactions` 表是 Agent 消息记录，不是命令事务） |
+
+参考图上传**已按 sha256 缓存**（`uploadLocalImage`，缓存落在
+`assets/references/uploads.json`），符合规范 §3.2。缓存键是文件内容而非路径，
+同图改名不重传、同名换图会重传，由 `tests/reference-upload-cache.test.ts` 守住。
 
 画布侧欠账：新建入口只有右键与 `Cmd+K`（规范要五个）、无语义缩放 LOD、
 Agent 面板固定右侧 Dock 无三态换位、关系线无语义（只有 id/source/target）。
