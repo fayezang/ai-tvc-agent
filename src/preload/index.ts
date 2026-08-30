@@ -29,7 +29,8 @@ const api: DesktopApi = {
     readBody: (input) => ipcRenderer.invoke(IpcChannels.projectReadBody, input),
     writeBody: (input) => ipcRenderer.invoke(IpcChannels.projectWriteBody, input),
     createNode: (input) => ipcRenderer.invoke(IpcChannels.projectCreateNode, input),
-    updateNodeStatus: (input) => ipcRenderer.invoke(IpcChannels.projectUpdateNodeStatus, input)
+    updateNodeStatus: (input) => ipcRenderer.invoke(IpcChannels.projectUpdateNodeStatus, input),
+    deleteNodes: (input) => ipcRenderer.invoke(IpcChannels.projectDeleteNodes, input)
   },
   provider: {
     status: () => ipcRenderer.invoke(IpcChannels.providerStatus),

@@ -76,7 +76,10 @@ describe("schema migrations", () => {
         "error_json",
         "created_at",
         "updated_at",
-        "revision"
+        "revision",
+        // 0001 追加：视频必须落盘，远程 CDN 链接有时效，不能作为唯一资产。
+        "local_paths_json",
+        "shot_id"
       ]);
       expect(columns("indexed_nodes")).toEqual(["id", "kind", "title", "body_path", "updated_at"]);
     });
@@ -104,6 +107,36 @@ describe("schema migrations", () => {
 
       const executed = runMigrations(asRunner(database));
       expect(executed).toEqual(migrations.slice(1).map((migration) => migration.id));
+    });
+  });
+
+  test("upgrades an existing project without losing its rows", () => {
+    withDatabase((database) => {
+      // 旧版本建库，写入一条任务。
+      const first = migrations[0];
+      runMigrations(asRunner(database), [first!]);
+      const now = new Date().toISOString();
+      database
+        .prepare(
+          `INSERT INTO video_jobs (
+            id, provider_task_id, model_id, state, progress, stage,
+            output_urls_json, request_json, created_at, updated_at, revision
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+        )
+        .run("job-old", "task-1", "model-a", "completed", 1, null, "[]", "{}", now, now);
+
+      // 升级到最新版本：既有数据必须保留，新列以默认值补齐。
+      runMigrations(asRunner(database));
+
+      const row = database.prepare("SELECT * FROM video_jobs WHERE id = ?").get("job-old") as {
+        id: string;
+        local_paths_json: string;
+        shot_id: string | null;
+      };
+      expect(row.id).toBe("job-old");
+      // 默认空数组而非 NULL：读取端可以直接 JSON.parse，无需处理两种缺失形态。
+      expect(row.local_paths_json).toBe("[]");
+      expect(row.shot_id).toBeNull();
     });
   });
 

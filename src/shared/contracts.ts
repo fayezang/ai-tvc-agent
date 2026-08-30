@@ -120,6 +120,18 @@ export const UpdateNodeStatusRequestSchema = Schema.Struct({
   status: NodeStatusSchema
 });
 
+export const DeleteNodesRequestSchema = Schema.Struct({
+  projectRoot: Schema.String,
+  nodeIds: Schema.Array(Schema.String)
+});
+
+export const DeleteNodesResultSchema = Schema.Struct({
+  canvas: CanvasSnapshotSchema,
+  /** 被移入 .agent/trash/ 的文件路径，供用户恢复与将来的撤销事务使用。 */
+  movedToTrash: Schema.Array(Schema.String)
+});
+export type DeleteNodesResult = typeof DeleteNodesResultSchema.Type;
+
 export const ProviderVideoRoutingSchema = Schema.Struct({
   hook: Schema.String.pipe(Schema.minLength(1)),
   reveal: Schema.String.pipe(Schema.minLength(1)),
@@ -192,7 +204,14 @@ export const VideoJobSchema = Schema.Struct({
   state: VideoTaskStateSchema,
   progress: Schema.NullOr(Schema.Number),
   stage: Schema.NullOr(Schema.String),
+  /** ORZ 返回的 CDN 链接。有时效（官方标注 14 天），不可作为唯一资产。 */
   outputUrls: Schema.Array(Schema.String),
+  /** 已落盘到项目目录的相对路径，与 outputUrls 顺序对应。这是持久的事实源。 */
+  localPaths: Schema.Array(Schema.String),
+  /** 用户选定的版本。此前只写入数据库却从未读出，导致选择在刷新后丢失。 */
+  selectedOutputUrl: Schema.NullOr(Schema.String),
+  /** 选中版本对应的本地路径。UI 应优先使用它而非远程 URL。 */
+  selectedLocalPath: Schema.NullOr(Schema.String),
   error: Schema.NullOr(
     Schema.Struct({
       code: Schema.String,
@@ -395,6 +414,7 @@ export interface DesktopApi {
     writeBody(input: typeof WriteBodyRequestSchema.Type): Promise<void>;
     createNode(input: typeof CreateNodeRequestSchema.Type): Promise<CanvasNode>;
     updateNodeStatus(input: typeof UpdateNodeStatusRequestSchema.Type): Promise<CanvasNode>;
+    deleteNodes(input: typeof DeleteNodesRequestSchema.Type): Promise<DeleteNodesResult>;
   };
   provider: {
     status(): Promise<ProviderStatus>;

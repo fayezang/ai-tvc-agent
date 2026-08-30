@@ -57,6 +57,14 @@ export const migrations: readonly Migration[] = [
         updated_at TEXT NOT NULL
       );
     `
+  },
+  {
+    id: "0001_video_local_assets",
+    description: "视频任务记录落盘路径与所属镜头",
+    sql: `
+      ALTER TABLE video_jobs ADD COLUMN local_paths_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE video_jobs ADD COLUMN shot_id TEXT;
+    `
   }
 ];
 

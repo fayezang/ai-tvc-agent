@@ -7,6 +7,7 @@ export const IpcChannels = {
   projectWriteBody: "project:write-body",
   projectCreateNode: "project:create-node",
   projectUpdateNodeStatus: "project:update-node-status",
+  projectDeleteNodes: "project:delete-nodes",
   providerStatus: "provider:status",
   providerConfigure: "provider:configure",
   providerValidate: "provider:validate",

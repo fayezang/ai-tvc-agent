@@ -67,7 +67,13 @@ export const writeAtomic = async (path: string, contents: string | Uint8Array): 
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   const handle = await open(temporaryPath, "wx");
   try {
-    await handle.writeFile(contents, "utf8");
+    // 只有字符串才指定编码。对 Uint8Array 传 "utf8" 会让 Node 按文本处理，
+    // 使视频、图片等二进制内容被破坏。
+    if (typeof contents === "string") {
+      await handle.writeFile(contents, "utf8");
+    } else {
+      await handle.writeFile(contents);
+    }
     await handle.sync();
   } finally {
     await handle.close();
@@ -205,6 +211,58 @@ export class ProjectService {
     };
     await this.saveCanvas(rootPath, next);
     return updated;
+  }
+
+  /**
+   * 删除节点，并同步清理其在磁盘上的资产。
+   *
+   * 此前删除只修改 canvas.json，nodes/*.md 与分镜 manifest 会永久残留，
+   * 项目目录随使用不断累积无主文件。
+   *
+   * 文件移入 .agent/trash/ 而非直接删除：删除是用户可能误触的高频操作，
+   * 保留副本使其可恢复。返回的 movedToTrash 也是将来接入撤销事务时的反向补丁依据。
+   */
+  async deleteNodes(
+    rootPath: string,
+    nodeIds: readonly string[]
+  ): Promise<{ canvas: CanvasSnapshot; movedToTrash: string[] }> {
+    const canvas = decodeCanvas(JSON.parse(await readFile(join(rootPath, "canvas.json"), "utf8")));
+    const targets = new Set(nodeIds);
+    const removed = canvas.nodes.filter((node) => targets.has(node.id));
+    if (removed.length === 0) return { canvas, movedToTrash: [] };
+
+    const next: CanvasSnapshot = {
+      ...canvas,
+      nodes: canvas.nodes.filter((node) => !targets.has(node.id)),
+      // 悬空的边会让画布持有指向不存在节点的引用，必须一并清除。
+      edges: canvas.edges.filter((edge) => !targets.has(edge.source) && !targets.has(edge.target))
+    };
+    await this.saveCanvas(rootPath, next);
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const movedToTrash: string[] = [];
+    for (const node of removed) {
+      // 节点正文与分镜 manifest 都以节点为单位存放，一并回收。
+      for (const relativePath of [node.bodyPath, `assets/storyboards/nodes/${node.id}.json`]) {
+        const source = ensureInside(rootPath, relativePath);
+        if (!(await exists(source))) continue;
+        const destination = join(rootPath, ".agent", "trash", stamp, relativePath);
+        await mkdir(dirname(destination), { recursive: true });
+        await rename(source, destination);
+        movedToTrash.push(relative(rootPath, destination));
+      }
+    }
+
+    const db = this.openIndex(rootPath);
+    try {
+      for (const node of removed) {
+        db.delete(indexedNodes).where(eq(indexedNodes.id, node.id)).run();
+      }
+    } finally {
+      db.$client.close();
+    }
+
+    return { canvas: next, movedToTrash };
   }
 
   async briefContext(rootPath: string): Promise<{ project: ProjectSummary; sourceMarkdown: string }> {

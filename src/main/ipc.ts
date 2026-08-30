@@ -29,6 +29,8 @@ import {
   ReadBodyRequestSchema,
   SaveCanvasRequestSchema,
   UpdateNodeStatusRequestSchema,
+  DeleteNodesRequestSchema,
+  DeleteNodesResultSchema,
   VideoEstimateSchema,
   VideoGenerationRequestSchema,
   VideoJobSchema,
@@ -106,6 +108,9 @@ export const registerIpc = (window: BrowserWindow, utility: UtilityClient): void
   );
   handle(IpcChannels.projectUpdateNodeStatus, UpdateNodeStatusRequestSchema, CanvasNodeSchema, (input) =>
     utility.call("project.updateNodeStatus", input)
+  );
+  handle(IpcChannels.projectDeleteNodes, DeleteNodesRequestSchema, DeleteNodesResultSchema, (input) =>
+    utility.call("project.deleteNodes", input)
   );
 
   handle(IpcChannels.providerStatus, Schema.Void, ProviderStatusSchema, () => credentials.status());

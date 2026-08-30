@@ -56,6 +56,8 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
       return projectService.createNode(payload.projectRoot, payload.kind, payload.position);
     case "project.updateNodeStatus":
       return projectService.updateNodeStatus(payload.projectRoot, payload.nodeId, payload.status);
+    case "project.deleteNodes":
+      return projectService.deleteNodes(payload.projectRoot, payload.nodeIds);
     case "video.listModels":
       return MODEL_DEFINITIONS;
     case "video.estimate":

@@ -147,8 +147,26 @@ function CanvasInner({ project, initialCanvas, onCanvasChange, onProjectChanged 
 
   const onNodesChange = useCallback(
     (changes: NodeChange<CanvasFlowNode>[]) => {
+      // 删除必须走主进程：仅改画布快照会让 nodes/*.md 与分镜 manifest
+      // 永久残留在磁盘上，项目目录随使用不断累积无主文件。
+      const removedIds = changes
+        .filter((change): change is NodeChange<CanvasFlowNode> & { type: "remove"; id: string } =>
+          change.type === "remove"
+        )
+        .map((change) => change.id);
+
       setNodes((current) => {
         const next = applyNodeChanges(changes, current);
+        if (removedIds.length > 0) {
+          // 服务端会一并清除悬空边，因此这里不再走本地 persist，
+          // 避免两条写路径先后落盘产生竞态。
+          void window.agentApp.project
+            .deleteNodes({ projectRoot: project.rootPath, nodeIds: removedIds })
+            .then((result) => {
+              onCanvasChange(result.canvas);
+            });
+          return next;
+        }
         // Selection is UI-only state. Persisting it triggers a parent canvas refresh
         // that immediately clears React Flow's selected flag and hides resize handles.
         if (changes.some((change) => change.type !== "select")) {
@@ -157,7 +175,7 @@ function CanvasInner({ project, initialCanvas, onCanvasChange, onProjectChanged 
         return next;
       });
     },
-    [edges, persist, viewport]
+    [edges, onCanvasChange, persist, project.rootPath, viewport]
   );
 
   const onEdgesChange = useCallback(
