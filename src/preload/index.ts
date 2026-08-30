@@ -74,7 +74,10 @@ const api: DesktopApi = {
   video: {
     listModels: () => ipcRenderer.invoke(IpcChannels.videoListModels),
     estimate: (input: VideoGenerationRequest) => ipcRenderer.invoke(IpcChannels.videoEstimate, input),
-    submit: (input: VideoGenerationRequest) => ipcRenderer.invoke(IpcChannels.videoSubmit, input),
+    // 先 prepare 看金额；只有用户点击确认才 approve。两者不可合并成一步。
+    prepare: (input: VideoGenerationRequest) => ipcRenderer.invoke(IpcChannels.videoPrepare, input),
+    approve: (jobId) => ipcRenderer.invoke(IpcChannels.videoApprove, jobId),
+    discard: (jobId) => ipcRenderer.invoke(IpcChannels.videoDiscard, jobId),
     cancel: (jobId) => ipcRenderer.invoke(IpcChannels.videoCancel, jobId),
     retry: (jobId) => ipcRenderer.invoke(IpcChannels.videoRetry, jobId),
     getJob: (jobId) => ipcRenderer.invoke(IpcChannels.videoGetJob, jobId),

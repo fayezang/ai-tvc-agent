@@ -142,21 +142,24 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
         modelId: resolveVideoModelForRole(generation.role, request.secrets?.videoModelRouting)
       });
     }
-    case "video.submit": {
+    case "video.prepare": {
       const generation = request.payload as VideoGenerationRequest;
       // 模型由角色路由决定，不采用调用方自带的 modelId。
-      // 参数规范化由 JobService.submit 统一负责 —— 它是所有提交路径的唯一
-      // 入口（retry 也复用它），在那里做才不会漏。
-      const configuredRequest: VideoGenerationRequest = {
+      // 本分支刻意不调 requireApiKey：准备阶段不发网络请求，
+      // 用户能在真正花钱前先看到这一镜的报价。
+      return jobService.prepare({
         ...generation,
         modelId: resolveVideoModelForRole(generation.role, request.secrets?.videoModelRouting)
-      };
-      const apiKey = requireApiKey(request);
-      const job = await jobService.submit(configuredRequest, apiKey);
-      // 交给轮询器接管。renderer 不再自己起 setInterval，
-      // 因此关闭面板或窗口都不会中断跟踪。
-      return trackJob(apiKey, configuredRequest.projectRoot, job);
+      });
     }
+    case "video.approve": {
+      const apiKey = requireApiKey(request);
+      const job = await jobService.approve(payload.projectRoot, payload.jobId, apiKey);
+      return trackJob(apiKey, payload.projectRoot, job);
+    }
+    case "video.discard":
+      // 服务端从来不知道待确认任务存在，因此无需 API Key。
+      return jobService.discard(payload.projectRoot, payload.jobId);
     case "video.getJob":
       return jobService.refresh(payload.projectRoot, payload.jobId, requireApiKey(request));
     case "video.cancel": {
@@ -165,11 +168,9 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
       for (const poller of pollers.values()) poller.stop(payload.jobId);
       return job;
     }
-    case "video.retry": {
-      const apiKey = requireApiKey(request);
-      const job = await jobService.retry(payload.projectRoot, payload.jobId, apiKey);
-      return trackJob(apiKey, payload.projectRoot, job);
-    }
+    case "video.retry":
+      // 重试同样可能计费，因此只建待确认尝试；真正提交仍走 approve。
+      return jobService.retry(payload.projectRoot, payload.jobId);
     case "video.selectVariant":
       return jobService.selectVariant(payload.projectRoot, payload.jobId, payload.outputUrl);
     case "video.chain":

@@ -5,10 +5,14 @@ import type {
   VideoGenerationRequest,
   VideoJob,
   VideoJobChain,
+  VideoPreparation,
   VideoTaskState
 } from "../shared/contracts.js";
 import { estimateVideoCost, normalizeVideoParams } from "../shared/video-estimate.js";
-import { isTerminalVideoTaskState } from "../shared/video-task-states.js";
+import {
+  isPreSubmitVideoTaskState,
+  isTerminalVideoTaskState
+} from "../shared/video-task-states.js";
 import { triageDanglingJobs, type TriageResult } from "./job-recovery.js";
 import { OrzClient, type OrzTaskResponse } from "./providers/orz-client.js";
 import { resolveOrzAdapter } from "./providers/orz-adapters.js";
@@ -190,6 +194,105 @@ export class JobService {
     }
   }
 
+  /**
+   * 提交前准备：建一条待确认记录并返回估价。
+   *
+   * **本方法不发任何网络请求。** 这是它存在的全部意义 —— 用户在看到金额
+   * 之前，不该产生任何服务端痕迹与任何计费。参考图上传（POST /files）也
+   * 推迟到 approve 之后，因为上传本身可能计费，而用户完全可能放弃。
+   *
+   * 返回的估价即写入数据库的快照，用户看到的和后续归集用的是同一份数字。
+   */
+  prepare(
+    incoming: VideoGenerationRequest,
+    lineage?: { parentJobId: string; rootJobId: string; attempt: number }
+  ): VideoPreparation {
+    const normalized = normalizeVideoParams(incoming);
+    const request: VideoGenerationRequest = {
+      ...incoming,
+      duration: normalized.duration,
+      resolution: normalized.resolution,
+      aspectRatio: normalized.aspectRatio
+    };
+    // 提前解析一次 Adapter：宁可在用户点确认之前就报错，
+    // 也不要让他确认了一个根本提交不出去的请求。
+    resolveOrzAdapter(request.modelId);
+    const estimate = estimateVideoCost(incoming);
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    this.insert(
+      request.projectRoot,
+      {
+        id,
+        providerTaskId: null,
+        modelId: request.modelId,
+        state: "awaiting-approval",
+        progress: null,
+        stage: "等待确认",
+        outputUrls: [],
+        localPaths: [],
+        selectedOutputUrl: null,
+        selectedLocalPath: null,
+        parentJobId: lineage?.parentJobId ?? null,
+        rootJobId: lineage?.rootJobId ?? id,
+        attempt: lineage?.attempt ?? 1,
+        error: null,
+        createdAt: now,
+        updatedAt: now
+      },
+      request,
+      incoming
+    );
+    return { job: this.get(request.projectRoot, id), estimate };
+  }
+
+  /**
+   * 确认并真正提交。
+   *
+   * 只接受 awaiting-approval 态。其他状态一律拒绝 —— 这道检查同时挡住了
+   * 重复点击确认按钮导致的重复计费，以及对一个已经在跑（或已结束）的任务
+   * 再次提交。
+   *
+   * 提交用的是 prepare 时落库的那份请求，不接受调用方再传参数：
+   * 用户批准的是那一份，不能在批准之后被换掉。
+   */
+  async approve(projectRoot: string, jobId: string, apiKey: string): Promise<VideoJob> {
+    const row = this.getRow(projectRoot, jobId);
+    if (row.state !== "awaiting-approval") {
+      throw new Error(
+        `任务 ${jobId} 当前状态为 ${row.state}，只有等待确认的任务可以提交。` +
+          `若要重新生成，请发起一次重试。`
+      );
+    }
+    const request = JSON.parse(row.request_json) as VideoGenerationRequest;
+    const adapter = resolveOrzAdapter(request.modelId);
+    this.patch(projectRoot, jobId, { state: "uploading", stage: "准备 ORZ 请求" });
+    try {
+      const task = await this.client(apiKey).submitVideo(adapter.build(request));
+      return await this.updateFromProvider(projectRoot, jobId, task);
+    } catch (error) {
+      return this.fail(projectRoot, jobId, error);
+    }
+  }
+
+  /**
+   * 放弃一条待确认的任务。
+   *
+   * 同样不发任何网络请求 —— 服务端从来不知道这个任务存在，没有什么可取消的。
+   * 记录保留为 canceled 而非删除：用户曾经准备生成什么、当时报价多少，
+   * 是有价值的历史。
+   */
+  discard(projectRoot: string, jobId: string): VideoJob {
+    const row = this.getRow(projectRoot, jobId);
+    if (!isPreSubmitVideoTaskState(row.state)) {
+      throw new Error(
+        `任务 ${jobId} 当前状态为 ${row.state}，已经提交给 ORZ，不能作为待确认任务放弃。` +
+          `请改用取消。`
+      );
+    }
+    return this.patch(projectRoot, jobId, { state: "canceled", stage: "已放弃，未提交" });
+  }
+
   async refresh(projectRoot: string, jobId: string, apiKey: string): Promise<VideoJob> {
     const row = this.getRow(projectRoot, jobId);
     if (!row.provider_task_id) return rowToJob(row);
@@ -214,20 +317,37 @@ export class JobService {
   }
 
   /**
-   * 重试。
+   * 重试：建一条待确认的新尝试并返回估价，**不直接提交**。
+   *
+   * 重试和首次提交一样真实计费，而用户恰恰最容易在连续失败后反复点重试。
+   * 因此它走同一条确认路径 —— 实际提交仍由 approve 完成。
    *
    * 原 job 行完整保留——它记录着那次尝试真实发生过、失败在哪一步、
    * 花了多少时间。删掉或改写它等于抹掉用户已经付过的那次成本。
    * 新 job 通过 parent_job_id / root_job_id 挂到同一条链上。
    */
-  async retry(projectRoot: string, jobId: string, apiKey: string): Promise<VideoJob> {
+  retry(projectRoot: string, jobId: string): VideoPreparation;
+  /**
+   * @deprecated 仅供第二批遗留的内部调用兼容；Renderer/IPC 不得传 apiKey。
+   * 有 apiKey 时立即 approve 的旧行为只保留到相关测试迁移完成。
+   */
+  retry(projectRoot: string, jobId: string, apiKey: string): Promise<VideoJob>;
+  retry(projectRoot: string, jobId: string, apiKey?: string): VideoPreparation | Promise<VideoJob> {
     const row = this.getRow(projectRoot, jobId);
     const request = JSON.parse(row.request_json) as VideoGenerationRequest;
     const rootJobId = row.root_job_id ?? row.id;
     // attempt 取整条链的最大值加一，而不是父任务的 attempt 加一：
     // 用户可能从链中任意一次失败的尝试发起重试，若按父任务递增会产生重号。
-    const attempt = this.maxAttempt(projectRoot, rootJobId) + 1;
-    return this.submit(request, apiKey, { parentJobId: row.id, rootJobId, attempt });
+    // maxAttempt 统计包含 awaiting-approval 的行，因此连开两个待确认重试
+    // 也不会撞号。
+    const preparation = this.prepare(request, {
+      parentJobId: row.id,
+      rootJobId,
+      attempt: this.maxAttempt(projectRoot, rootJobId) + 1
+    });
+    // 正式 UI 与 IPC 不会传 apiKey，永远返回 awaiting-approval。
+    // 这一分支仅让第二批的直接服务调用保持兼容，待测试迁移后删除。
+    return apiKey ? this.approve(projectRoot, preparation.job.id, apiKey) : preparation;
   }
 
   /**

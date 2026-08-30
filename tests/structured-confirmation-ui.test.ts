@@ -50,12 +50,15 @@ describe("structured Agent confirmation flow", () => {
     expect(service).toContain("Convert this still-image prompt into a production-ready image-to-video prompt");
   });
 
-  test("requires all shots and keeps full-video prompt editable before native-audio generation", () => {
+  test("requires all shots and shows a paid confirmation before native-audio generation", () => {
     const agentPanel = read("../src/renderer/src/components/agent-panel.tsx");
     const service = read("../src/utility/agent-service.ts");
     expect(agentPanel).toContain("生成完整视频 Prompt");
-    expect(agentPanel).toContain("完整视频 Prompt（确认前可编辑）");
-    expect(agentPanel).toContain("确认并生成视频");
+    expect(agentPanel).toContain("完整视频 Prompt（生成前可编辑）");
+    expect(agentPanel).toContain("查看报价");
+    expect(agentPanel).toContain("确认支付并生成");
+    expect(agentPanel).toContain("放弃，不产生费用");
+    expect(agentPanel).toContain("pricingFetchedAt");
     expect(agentPanel).toContain("generateAudio: true");
     expect(service).toContain("必须选择 ${shots.length} 张图片");
     expect(service).toContain("每个镜头必须且只能选择一张静态图");

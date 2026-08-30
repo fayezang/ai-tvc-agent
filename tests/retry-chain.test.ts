@@ -86,6 +86,11 @@ const withProject = async <T>(
   }
 };
 
+const retryAndApprove = async (jobs: JobService, projectRoot: string, jobId: string) => {
+  const preparation = jobs.retry(projectRoot, jobId);
+  return jobs.approve(projectRoot, preparation.job.id, "key");
+};
+
 describe("retry chains", () => {
   test("keeps the original row and links the new attempt to it", async () => {
     await withProject(async ({ projectRoot, service }) => {
@@ -93,7 +98,7 @@ describe("retry chains", () => {
       try {
         const jobs = service(orz.baseUrl);
         const first = await jobs.submit(request(projectRoot), "key");
-        const second = await jobs.retry(projectRoot, first.id, "key");
+        const second = await retryAndApprove(jobs, projectRoot, first.id);
 
         // 原行必须保留：它记录着那次尝试真实发生过、失败在哪一步。
         // 旧实现直接新建 jobId 且旧行残留但毫无关联，用户看到两条孤立记录。
@@ -130,8 +135,8 @@ describe("retry chains", () => {
       try {
         const jobs = service(orz.baseUrl);
         const first = await jobs.submit(request(projectRoot), "key");
-        const second = await jobs.retry(projectRoot, first.id, "key");
-        const third = await jobs.retry(projectRoot, second.id, "key");
+        const second = await retryAndApprove(jobs, projectRoot, first.id);
+        const third = await retryAndApprove(jobs, projectRoot, second.id);
 
         expect([second.rootJobId, third.rootJobId]).toEqual([first.id, first.id]);
         expect([first.attempt, second.attempt, third.attempt]).toEqual([1, 2, 3]);
@@ -150,10 +155,10 @@ describe("retry chains", () => {
       try {
         const jobs = service(orz.baseUrl);
         const first = await jobs.submit(request(projectRoot), "key");
-        await jobs.retry(projectRoot, first.id, "key"); // attempt 2
+        await retryAndApprove(jobs, projectRoot, first.id); // attempt 2
         // 用户完全可能从链里更早的一次失败发起重试。
         // 若按父任务的 attempt 加一，这里会重号成 2。
-        const third = await jobs.retry(projectRoot, first.id, "key");
+        const third = await retryAndApprove(jobs, projectRoot, first.id);
 
         expect(third.attempt).toBe(3);
         expect(third.parentJobId).toBe(first.id);
@@ -172,7 +177,7 @@ describe("retry chains", () => {
       try {
         const jobs = service(orz.baseUrl);
         const first = await jobs.submit(request(projectRoot), "key");
-        const second = await jobs.retry(projectRoot, first.id, "key");
+        const second = await retryAndApprove(jobs, projectRoot, first.id);
 
         // 从根查和从末端查必须得到同一条链。
         expect(jobs.chain(projectRoot, first.id).attempts).toHaveLength(2);
@@ -189,7 +194,7 @@ describe("retry chains", () => {
       try {
         const jobs = service(orz.baseUrl);
         const first = await jobs.submit(request(projectRoot), "key");
-        await jobs.retry(projectRoot, first.id, "key");
+        await retryAndApprove(jobs, projectRoot, first.id);
         // 另一个镜头的任务，与上面那条链无关。
         const unrelated = await jobs.submit(request(projectRoot), "key");
 
@@ -230,7 +235,7 @@ describe("chain cost accounting", () => {
       try {
         const jobs = service(orz.baseUrl);
         const first = await jobs.submit(request(projectRoot), "key");
-        await jobs.retry(projectRoot, first.id, "key");
+        await retryAndApprove(jobs, projectRoot, first.id);
         const chain = jobs.chain(projectRoot, first.id);
 
         // 两次都成功产出 → 两次都真实计费。重试不是免费的，
@@ -251,7 +256,7 @@ describe("chain cost accounting", () => {
         const jobs = service(orz.baseUrl);
         const first = await jobs.submit(request(projectRoot), "key");
         succeed = true;
-        await jobs.retry(projectRoot, first.id, "key");
+        await retryAndApprove(jobs, projectRoot, first.id);
         const chain = jobs.chain(projectRoot, first.id);
 
         // 失败那次不该计费。算进去会让用户以为被多收了一次。
@@ -269,7 +274,7 @@ describe("chain cost accounting", () => {
       try {
         const jobs = service(orz.baseUrl);
         const first = await jobs.submit(request(projectRoot), "key");
-        await jobs.retry(projectRoot, first.id, "key");
+        await retryAndApprove(jobs, projectRoot, first.id);
         const chain = jobs.chain(projectRoot, first.id);
 
         expect(chain.totalCost).toBeNull();
@@ -286,7 +291,7 @@ describe("chain cost accounting", () => {
       try {
         const jobs = service(orz.baseUrl);
         const first = await jobs.submit(request(projectRoot), "key");
-        const second = await jobs.retry(projectRoot, first.id, "key");
+        const second = await retryAndApprove(jobs, projectRoot, first.id);
 
         // 模拟 migration 0003 之前产生的行：有结果，但没有估价快照。
         const db = new Database(join(projectRoot, ".agent", "index.sqlite"));

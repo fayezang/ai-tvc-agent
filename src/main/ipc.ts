@@ -32,6 +32,7 @@ import {
   DeleteNodesRequestSchema,
   DeleteNodesResultSchema,
   VideoEstimateSchema,
+  VideoPreparationSchema,
   VideoGenerationRequestSchema,
   VideoJobSchema,
   VideoJobChainSchema,
@@ -177,11 +178,19 @@ export const registerIpc = (window: BrowserWindow, utility: UtilityClient): void
   handle(IpcChannels.videoEstimate, VideoGenerationRequestSchema, VideoEstimateSchema, (input) =>
     utility.call("video.estimate", input, credentials.secrets())
   );
-  handle(IpcChannels.videoSubmit, VideoGenerationRequestSchema, VideoJobSchema, (input) =>
-    utility.call("video.submit", input, credentials.secrets())
+  handle(IpcChannels.videoPrepare, VideoGenerationRequestSchema, VideoPreparationSchema, (input) =>
+    utility.call("video.prepare", input, credentials.secrets())
   );
 
   const jobIdSchema = Schema.String.pipe(Schema.minLength(1));
+  handle(IpcChannels.videoApprove, jobIdSchema, VideoJobSchema, (jobId) => {
+    if (!activeProjectRoot) throw new Error("请先打开项目");
+    return utility.call("video.approve", { projectRoot: activeProjectRoot, jobId }, credentials.secrets());
+  });
+  handle(IpcChannels.videoDiscard, jobIdSchema, VideoJobSchema, (jobId) => {
+    if (!activeProjectRoot) throw new Error("请先打开项目");
+    return utility.call("video.discard", { projectRoot: activeProjectRoot, jobId });
+  });
   handle(IpcChannels.videoGetJob, jobIdSchema, VideoJobSchema, (jobId) => {
     if (!activeProjectRoot) throw new Error("请先打开项目");
     return utility.call("video.getJob", { projectRoot: activeProjectRoot, jobId }, credentials.secrets());
@@ -190,9 +199,9 @@ export const registerIpc = (window: BrowserWindow, utility: UtilityClient): void
     if (!activeProjectRoot) throw new Error("请先打开项目");
     return utility.call("video.cancel", { projectRoot: activeProjectRoot, jobId }, credentials.secrets());
   });
-  handle(IpcChannels.videoRetry, jobIdSchema, VideoJobSchema, (jobId) => {
+  handle(IpcChannels.videoRetry, jobIdSchema, VideoPreparationSchema, (jobId) => {
     if (!activeProjectRoot) throw new Error("请先打开项目");
-    return utility.call("video.retry", { projectRoot: activeProjectRoot, jobId }, credentials.secrets());
+    return utility.call("video.retry", { projectRoot: activeProjectRoot, jobId });
   });
   handle(
     IpcChannels.videoSelectVariant,

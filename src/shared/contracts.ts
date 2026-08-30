@@ -279,6 +279,18 @@ export const VideoEstimateSchema = Schema.Struct({
 });
 export type VideoEstimate = typeof VideoEstimateSchema.Type;
 
+/**
+ * 一条待确认任务及其估价。
+ *
+ * video.prepare 的返回值。此时数据库里已有一条 awaiting-approval 记录，
+ * 但 ORZ 那边什么都没发生 —— 用户看到金额之后才决定是否 approve。
+ */
+export const VideoPreparationSchema = Schema.Struct({
+  job: VideoJobSchema,
+  estimate: VideoEstimateSchema
+});
+export type VideoPreparation = typeof VideoPreparationSchema.Type;
+
 export const ModelDefinitionSchema = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -496,9 +508,18 @@ export interface DesktopApi {
   video: {
     listModels(): Promise<readonly ModelDefinition[]>;
     estimate(input: VideoGenerationRequest): Promise<typeof VideoEstimateSchema.Type>;
-    submit(input: VideoGenerationRequest): Promise<VideoJob>;
+    /**
+     * 建一条待确认任务并返回估价。不发任何网络请求，不产生任何计费。
+     * 用户看到金额后调 approve 才真正提交。
+     */
+    prepare(input: VideoGenerationRequest): Promise<VideoPreparation>;
+    /** 确认并提交。只接受 awaiting-approval 态的任务。 */
+    approve(jobId: string): Promise<VideoJob>;
+    /** 放弃一条待确认任务。同样不发网络请求。 */
+    discard(jobId: string): Promise<VideoJob>;
     cancel(jobId: string): Promise<VideoJob>;
-    retry(jobId: string): Promise<VideoJob>;
+    /** 建一条待确认的新尝试并返回估价。重试同样真实计费，因此也要确认。 */
+    retry(jobId: string): Promise<VideoPreparation>;
     /** 查询一条重试链的全部尝试与累计用量。 */
     chain(jobId: string): Promise<VideoJobChain>;
     getJob(jobId: string): Promise<VideoJob>;

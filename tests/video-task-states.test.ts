@@ -59,12 +59,15 @@ describe("video task state machine", () => {
     }
   });
 
-  test("keeps draft and awaiting-approval unused until batch 3", () => {
-    // 这两态属于第三批的提交前确认面板。本轮若提前流转它们，
-    // 会让恢复流程把「用户还没点提交」的任务判成悬空任务。
+  test("uses awaiting-approval for batch 3 confirmation while keeping it out of recovery", () => {
+    // 第三批正式启用这两态：prepare 写 awaiting-approval，用户未确认的任务
+    // 服务端从未见过，重启时绝不能被恢复流程当成悬空任务。
     const jobService = source("src/utility/job-service.ts");
-    expect(jobService).not.toContain('state: "draft"');
-    expect(jobService).not.toContain('state: "awaiting-approval"');
+    expect(jobService).toContain('state: "awaiting-approval"');
+    expect(jobService).toContain('row.state !== "awaiting-approval"');
+    for (const state of PRE_SUBMIT_VIDEO_TASK_STATES) {
+      expect(isRecoverableVideoTaskState(state), state).toBe(false);
+    }
   });
 });
 

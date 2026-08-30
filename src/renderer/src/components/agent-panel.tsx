@@ -12,7 +12,14 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { ArrowUp, Check, Circle, Film, LoaderCircle, PanelRightClose, RefreshCw, Sparkles } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import type { AgentWorkflowState, CanvasNode, GenerateVideoPromptResult, VideoJob } from "@shared/contracts";
+import type {
+  AgentWorkflowState,
+  CanvasNode,
+  GenerateVideoPromptResult,
+  VideoJob,
+  VideoPreparation
+} from "@shared/contracts";
+import { pricedResolutions } from "@shared/orz-pricing";
 import { isTerminalVideoTaskState } from "@shared/video-task-states";
 import { useUiStore } from "../store/ui-store";
 import { Button } from "./ui/button";
@@ -193,7 +200,7 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
   const [isRunning, setIsRunning] = useState(false);
   const [workflowState, setWorkflowState] = useState<AgentWorkflowState | null>(null);
   const [workflowBusy, setWorkflowBusy] = useState<
-    "brief" | "script" | "storyboard-images" | "video-prompt" | "video-submit" | null
+    "brief" | "script" | "storyboard-images" | "video-prompt" | "video-prepare" | "video-approve" | "video-discard" | null
   >(null);
   const [workflowError, setWorkflowError] = useState("");
   const [selectedDirectionIndex, setSelectedDirectionIndex] = useState<number | null>(null);
@@ -201,6 +208,12 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
   const [videoPromptResult, setVideoPromptResult] = useState<GenerateVideoPromptResult | null>(null);
   const [videoPromptDraft, setVideoPromptDraft] = useState("");
   const [videoJob, setVideoJob] = useState<VideoJob | null>(null);
+  /** prepare 成功后才有值：用户尚未花钱、只是在看报价。 */
+  const [videoPreparation, setVideoPreparation] = useState<VideoPreparation | null>(null);
+  /** 720p 是产品默认档；实际可选项按已配置的路由模型决定。 */
+  const [videoResolution, setVideoResolution] = useState<"480p" | "720p" | "1080p">("720p");
+  /** 当前 CTA 路由实际使用的模型，来自安全的 provider.status，不由 renderer 猜测。 */
+  const [videoModelId, setVideoModelId] = useState<string | null>(null);
   const streamingId = useRef<string | null>(null);
   const workflowLoadId = useRef(0);
   const selectedNodes = useMemo(
@@ -519,6 +532,8 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
       setVideoPromptResult(result);
       setVideoPromptDraft(result.prompt);
       setVideoJob(null);
+      // 新 Prompt 是一份新请求，旧报价绝不能沿用。
+      setVideoPreparation(null);
       setMessages((current) => current.map((message) =>
         message.id === assistantId
           ? { ...message, text: "完整视频 Prompt 已生成并显示在下方。你可以编辑，确认后才会提交付费视频生成任务。" }
@@ -536,33 +551,47 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
     }
   };
 
-  const submitFullVideo = async (): Promise<void> => {
+  const prepareFullVideo = async (): Promise<void> => {
     if (!videoPromptResult || !videoPromptDraft.trim() || isRunning || workflowBusy) return;
-    setWorkflowBusy("video-submit");
+    setWorkflowBusy("video-prepare");
     setWorkflowError("");
     setIsRunning(true);
     try {
-      const job = await window.agentApp.video.submit({
+      // renderer 不猜模型：用户在设置里选择的 CTA 路由，才是 role="other" 的
+      // 实际模型。缺配置就明确报错，不暗中换一个模型或默认最贵档。
+      const provider = await window.agentApp.provider.status();
+      const modelId = provider.videoModelRouting?.cta;
+      if (!modelId) throw new Error("请先在 ORZ 设置中选择视频模型");
+
+      const resolutions = pricedResolutions(modelId);
+      if (resolutions.length === 0) throw new Error(`模型 ${modelId} 没有可用的价格档，无法生成确认报价`);
+      // 720p 是默认，因为 Seedance 1080p 比 720p 贵约 2.2 倍；
+      // 但若该模型没有 720p，绝不猜档，改用它的第一档并在卡片上如实展示。
+      const resolution = resolutions.includes(videoResolution) ? videoResolution : resolutions[0]!;
+      if (resolution !== videoResolution) setVideoResolution(resolution);
+
+      const preparation = await window.agentApp.video.prepare({
         projectRoot,
         shotId: `complete-${videoPromptResult.scriptNodeId}`,
         role: "other",
-        modelId: "bytedance/seedance-2",
+        modelId,
         prompt: videoPromptDraft.trim(),
         duration: videoPromptResult.duration,
         aspectRatio: videoPromptResult.aspectRatio,
-        resolution: "1080p",
+        resolution,
         referenceImageUrls: videoPromptResult.referenceImageUrls,
         referenceVideoUrls: [],
         referenceAudioUrls: [],
         generateAudio: true
       });
-      setVideoJob(job);
+      setVideoPreparation(preparation);
+      setVideoJob(preparation.job);
       setMessages((current) => [
         ...current,
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          text: "已确认并提交完整视频生成。模型将生成原生声音，并按 Prompt 尽量逐字朗读 VO。"
+          text: "报价已准备好。请核对金额与参数；点击“确认支付并生成”后才会向 ORZ 提交并产生费用。"
         }
       ]);
     } catch (error) {
@@ -570,6 +599,51 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
     } finally {
       setWorkflowBusy(null);
       setIsRunning(false);
+    }
+  };
+
+  const approveFullVideo = async (): Promise<void> => {
+    if (!videoPreparation || isRunning || workflowBusy) return;
+    setWorkflowBusy("video-approve");
+    setWorkflowError("");
+    setIsRunning(true);
+    try {
+      // approve 只带 jobId，不能在用户确认之后悄悄改 Prompt、时长或模型。
+      const job = await window.agentApp.video.approve(videoPreparation.job.id);
+      setVideoJob(job);
+      setVideoPreparation(null);
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          text: "已确认并提交视频生成。任务正在 ORZ 运行，完成后会自动下载保存到项目目录。"
+        }
+      ]);
+    } catch (error) {
+      setWorkflowError(cleanRemoteError(error));
+    } finally {
+      setWorkflowBusy(null);
+      setIsRunning(false);
+    }
+  };
+
+  const discardPreparedVideo = async (): Promise<void> => {
+    if (!videoPreparation || isRunning || workflowBusy) return;
+    setWorkflowBusy("video-discard");
+    setWorkflowError("");
+    try {
+      const job = await window.agentApp.video.discard(videoPreparation.job.id);
+      setVideoJob(job);
+      setVideoPreparation(null);
+      setMessages((current) => [
+        ...current,
+        { id: crypto.randomUUID(), role: "assistant", text: "已放弃本次生成，没有向 ORZ 提交任务，也不会产生费用。" }
+      ]);
+    } catch (error) {
+      setWorkflowError(cleanRemoteError(error));
+    } finally {
+      setWorkflowBusy(null);
     }
   };
 
@@ -595,6 +669,28 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
     !workflowState.script &&
     (!workflowState.creative || creativeDirections.length !== 3)
   );
+
+  useEffect(() => {
+    if (!videoPromptResult) {
+      setVideoModelId(null);
+      return;
+    }
+    let cancelled = false;
+    void window.agentApp.provider.status().then((provider) => {
+      if (cancelled) return;
+      const modelId = provider.videoModelRouting?.cta ?? null;
+      setVideoModelId(modelId);
+      if (!modelId) return;
+      const resolutions = pricedResolutions(modelId);
+      // 720p 为默认；当前模型没有它才退到自己的第一档。
+      if (!resolutions.includes(videoResolution) && resolutions[0]) setVideoResolution(resolutions[0]);
+    }).catch(() => {
+      if (!cancelled) setVideoModelId(null);
+    });
+    return () => { cancelled = true; };
+  }, [videoPromptResult, videoResolution]);
+
+  const availableVideoResolutions = videoModelId ? pricedResolutions(videoModelId) : [];
 
   return (
     <motion.aside
@@ -779,36 +875,74 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
         {videoPromptResult ? (
           <section className="mb-3 rounded-xl border border-[var(--accent)]/50 bg-[var(--canvas)] p-3">
             <label className="grid gap-1.5 text-xs text-[var(--muted)]">
-              完整视频 Prompt（确认前可编辑）
+              完整视频 Prompt（生成前可编辑）
               <textarea
                 value={videoPromptDraft}
-                disabled={workflowBusy === "video-submit"}
-                onChange={(event) => setVideoPromptDraft(event.target.value)}
+                disabled={videoPreparation !== null || workflowBusy === "video-approve"}
+                onChange={(event) => {
+                  setVideoPromptDraft(event.target.value);
+                  // 改了文字，旧报价就不可信了；用户必须重新准备报价。
+                  if (videoPreparation) setVideoPreparation(null);
+                }}
                 rows={8}
                 className="resize-y rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--text)] outline-none focus:border-[var(--focus)]"
               />
             </label>
-            <p className="mt-2 text-[11px] leading-5 text-[var(--muted)]">
-              总时长 {videoPromptResult.duration}s · {videoPromptResult.shotCount} 个镜头 · 原生声音开启 · VO 要求尽量逐字生成
-            </p>
-            <Button
-              className="mt-3 w-full"
-              disabled={isRunning || !videoPromptDraft.trim() || (videoJob !== null && !isTerminalVideoTaskState(videoJob.state))}
-              onClick={() => void submitFullVideo()}
-            >
-              {workflowBusy === "video-submit" ? <LoaderCircle className="size-4 animate-spin" /> : <Film className="size-4" />}
-              确认并生成视频
-            </Button>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] leading-5 text-[var(--muted)]">
+              <p>总时长 {videoPromptResult.duration}s · {videoPromptResult.shotCount} 个镜头</p>
+              <label className="flex items-center justify-end gap-1.5">
+                分辨率
+                <select
+                  value={videoResolution}
+                  disabled={videoPreparation !== null || availableVideoResolutions.length === 0}
+                  onChange={(event) => setVideoResolution(event.target.value as "480p" | "720p" | "1080p")}
+                  className="rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-[11px] text-[var(--text)]"
+                >
+                  {availableVideoResolutions.map((resolution) => <option key={resolution} value={resolution}>{resolution}</option>)}
+                </select>
+              </label>
+            </div>
+            {videoPreparation ? (
+              <div className="mt-3 rounded-lg border border-[var(--warning)]/50 bg-[var(--warning-soft)] p-3 text-xs leading-5 text-[var(--text)]">
+                <p className="font-medium">请确认本次付费生成</p>
+                <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[var(--muted)]">
+                  <dt>模型</dt><dd className="text-right text-[var(--text)]">{videoPreparation.estimate.modelId}</dd>
+                  <dt>分辨率</dt><dd className="text-right text-[var(--text)]">{videoResolution}</dd>
+                  <dt>计费时长</dt><dd className="text-right text-[var(--text)]">{videoPreparation.estimate.billedSeconds}s</dd>
+                  <dt>单价</dt><dd className="text-right text-[var(--text)]">{videoPreparation.estimate.amountPerSecond === null ? "无法估算" : `¥${videoPreparation.estimate.amountPerSecond}/秒`}</dd>
+                  <dt>预计费用</dt><dd className="text-right font-medium text-[var(--text)]">{videoPreparation.estimate.amount === null ? "无法估算" : `¥${videoPreparation.estimate.amount}`}</dd>
+                  <dt>价格日期</dt><dd className="text-right text-[var(--text)]">{videoPreparation.estimate.pricingFetchedAt}</dd>
+                </dl>
+                {videoPreparation.estimate.adjustments.length > 0 ? (
+                  <ul className="mt-2 list-disc pl-4 text-[var(--muted)]">
+                    {videoPreparation.estimate.adjustments.map((adjustment) => <li key={adjustment}>{adjustment}</li>)}
+                  </ul>
+                ) : null}
+                <p className="mt-2 text-[11px] text-[var(--muted)]">{videoPreparation.estimate.note}</p>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <Button variant="outline" disabled={workflowBusy !== null} onClick={() => void discardPreparedVideo()}>放弃，不产生费用</Button>
+                  <Button disabled={workflowBusy !== null || videoPreparation.estimate.amount === null} onClick={() => void approveFullVideo()}>
+                    {workflowBusy === "video-approve" ? <LoaderCircle className="size-4 animate-spin" /> : <Check className="size-4" />}
+                    确认支付并生成
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                className="mt-3 w-full"
+                disabled={isRunning || !videoPromptDraft.trim() || availableVideoResolutions.length === 0 || (videoJob !== null && !isTerminalVideoTaskState(videoJob.state))}
+                onClick={() => void prepareFullVideo()}
+              >
+                {workflowBusy === "video-prepare" ? <LoaderCircle className="size-4 animate-spin" /> : <Film className="size-4" />}
+                查看报价
+              </Button>
+            )}
             {videoJob ? (
               <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2.5 text-xs leading-5 text-[var(--muted)]">
                 <p>视频任务：{videoJob.state}{videoJob.progress === null ? "" : ` · ${Math.round(videoJob.progress * 100)}%`}</p>
-                {/* stage 是中文的阶段描述。恢复与落盘阶段全靠它说明当前在做什么，
-                    否则用户只会看到 recovering / downloading 这样的英文状态码。 */}
                 {videoJob.stage ? <p>{videoJob.stage}</p> : null}
                 {videoJob.error?.message ? <p className="text-[var(--danger)]">{videoJob.error.message}</p> : null}
-                {videoJob.outputUrls[0] ? (
-                  <video className="mt-2 w-full rounded-lg" src={videoJob.outputUrls[0]} controls />
-                ) : null}
+                {videoJob.outputUrls[0] ? <video className="mt-2 w-full rounded-lg" src={videoJob.outputUrls[0]} controls /> : null}
               </div>
             ) : null}
           </section>
