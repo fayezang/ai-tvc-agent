@@ -51,47 +51,35 @@ describe("video cost estimation", () => {
     expect(listPrice.amount).toBe(32.4);
   });
 
-  test("bills the seconds the model generates, not the seconds the script wants", () => {
-    // 本批最容易被漏掉、也最伤用户信任的一条：
-    // 脚本要 7 秒，Kling 只有 5 / 10 两档，取 10 秒生成再裁剪，而 ORZ 按 10 秒计费。
-    // 若按脚本时长报价，用户以为付 ¥14.63，实际付 ¥20.9。
-    const estimate = estimateVideoCost(
+  test("blocks an inexact duration instead of quoting a longer tier", () => {
+    expect(() => estimateVideoCost(
       request({ modelId: ORZ_MODELS.kling, duration: 7, resolution: "720p" })
-    );
-    expect(estimate.requestedSeconds).toBe(7);
-    expect(estimate.billedSeconds).toBe(10);
-    expect(estimate.amount).toBe(20.9);
-    expect(estimate.adjustments.join(" ")).toContain("计费按 10 秒计");
-    expect(estimate.adjustments.join(" ")).toContain("裁剪至脚本要求的 7 秒");
+    )).toThrow("不支持项目要求的精确 7 秒");
   });
 
-  test("picks the smallest tier that still covers the shot", () => {
-    // Kling 有 5 与 10 两档。脚本要 7 秒 → 取 10 秒再裁，不取 5 秒。
-    // 取更短的档会让画面时长不够，是静默损坏内容。
+  test("never rounds a discrete duration up", () => {
     const normalized = normalizeVideoParams({
       modelId: ORZ_MODELS.kling,
       duration: 7,
       resolution: "720p",
       aspectRatio: "16:9"
     });
-    expect(normalized.duration).toBe(10);
-    expect(normalized.adjustments.join(" ")).toContain("计费按 10 秒计");
+    expect(normalized.duration).toBe(7);
+    expect(normalized.adjustments.join(" ")).toContain("不会向上取整");
   });
 
-  test("warns instead of silently truncating when no tier is long enough", () => {
-    // 脚本要 15 秒但 Kling 最长 10 秒 —— 这时无法靠裁剪解决，
-    // 必须提示拆分镜头，不能假装没事。
+  test("never truncates when no exact tier exists", () => {
     const normalized = normalizeVideoParams({
       modelId: ORZ_MODELS.kling,
       duration: 15,
       resolution: "720p",
       aspectRatio: "16:9"
     });
-    expect(normalized.duration).toBe(10);
-    expect(normalized.adjustments.join(" ")).toContain("请拆分该镜头");
+    expect(normalized.duration).toBe(15);
+    expect(normalized.adjustments.join(" ")).toContain("必须更换模型");
   });
 
-  test("clamps Seedance to its four-to-fifteen-second window", () => {
+  test("does not clamp Seedance outside its supported window", () => {
     expect(
       normalizeVideoParams({
         modelId: ORZ_MODELS.seedance,
@@ -99,15 +87,15 @@ describe("video cost estimation", () => {
         resolution: "720p",
         aspectRatio: "16:9"
       }).duration
-    ).toBe(4);
+    ).toBe(2);
     const tooLong = normalizeVideoParams({
       modelId: ORZ_MODELS.seedance,
       duration: 20,
       resolution: "720p",
       aspectRatio: "16:9"
     });
-    expect(tooLong.duration).toBe(15);
-    expect(tooLong.adjustments.join(" ")).toContain("最长 15 秒");
+    expect(tooLong.duration).toBe(20);
+    expect(tooLong.adjustments.join(" ")).toContain("不会调整时长");
   });
 
   test("downgrades an unsupported resolution and says so", () => {

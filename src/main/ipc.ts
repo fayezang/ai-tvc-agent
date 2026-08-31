@@ -163,7 +163,7 @@ export const registerIpc = (window: BrowserWindow, utility: UtilityClient): void
     utility.call("agent.selectStoryboardImageVersion", input)
   );
   handle(IpcChannels.agentApplyStoryboardImage, ApplyStoryboardImageRequestSchema, AgentReplySchema, (input) =>
-    utility.call("agent.applyStoryboardImage", input, credentials.secrets())
+    utility.call("agent.applyStoryboardImage", input)
   );
   handle(IpcChannels.agentGenerateVideoPrompt, GenerateVideoPromptRequestSchema, GenerateVideoPromptResultSchema, (input) =>
     utility.call("agent.generateVideoPrompt", input, credentials.secrets())
@@ -216,10 +216,19 @@ export const registerIpc = (window: BrowserWindow, utility: UtilityClient): void
     if (!activeProjectRoot) throw new Error("请先打开项目");
     return utility.call("video.chain", { projectRoot: activeProjectRoot, jobId });
   });
-  handle(
-    IpcChannels.videoRenderProject,
-    Schema.String,
-    Schema.Struct({ outputPath: Schema.String }),
-    (projectRoot) => utility.call("video.renderProject", { projectRoot })
-  );
+  handle(IpcChannels.videoExportCompleted, jobIdSchema, Schema.NullOr(Schema.Struct({ outputPath: Schema.String })), async (jobId) => {
+    if (!activeProjectRoot) throw new Error("请先打开项目");
+    const safeJobId = jobId.replace(/[^a-zA-Z0-9_-]/g, "-") || "video";
+    const selection = await dialog.showSaveDialog(window, {
+      title: "导出已完成视频",
+      defaultPath: `final-${safeJobId}.mp4`,
+      filters: [{ name: "MP4 视频", extensions: ["mp4"] }]
+    });
+    if (selection.canceled || !selection.filePath) return null;
+    return utility.call("video.exportCompleted", {
+      projectRoot: activeProjectRoot,
+      jobId,
+      destinationPath: selection.filePath
+    });
+  });
 };

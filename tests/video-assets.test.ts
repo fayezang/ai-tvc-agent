@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   describeVideoBytes,
+  exportCompletedVideoFile,
   isIsoBaseMediaFile,
   persistVideoOutputs,
   videoAssetRelativePath
@@ -71,6 +72,63 @@ describe("video asset paths", () => {
   test("groups every variant of a job under one directory", () => {
     expect(videoAssetRelativePath("job-1", 0)).toBe("assets/videos/job-1/0.mp4");
     expect(videoAssetRelativePath("job-1", 2)).toBe("assets/videos/job-1/2.mp4");
+  });
+});
+
+describe("exporting one completed full video", () => {
+  test("copies the selected source into outputs byte for byte", async () => {
+    await withProject(async (projectRoot) => {
+      const sourceRelativePath = "assets/videos/job-export/0.mp4";
+      await writeAtomic(join(projectRoot, sourceRelativePath), MP4_HEADER);
+
+      const result = await exportCompletedVideoFile({
+        projectRoot,
+        jobId: "job-export",
+        sourceRelativePath
+      });
+
+      expect(result.outputPath).toBe(join(projectRoot, "outputs/final-job-export.mp4"));
+      expect([...readFileSync(result.outputPath)]).toEqual([...MP4_HEADER]);
+      expect([...readFileSync(join(projectRoot, sourceRelativePath))]).toEqual([...MP4_HEADER]);
+    });
+  });
+
+  test("copies to the exact path chosen in the native save dialog", async () => {
+    await withProject(async (projectRoot) => {
+      const sourceRelativePath = "assets/videos/job-save-as/0.mp4";
+      const destinationPath = join(projectRoot, "user-selected", "campaign-final.mp4");
+      await writeAtomic(join(projectRoot, sourceRelativePath), MP4_HEADER);
+
+      const result = await exportCompletedVideoFile({
+        projectRoot,
+        jobId: "job-save-as",
+        sourceRelativePath,
+        destinationPath
+      });
+
+      expect(result.outputPath).toBe(destinationPath);
+      expect([...readFileSync(destinationPath)]).toEqual([...MP4_HEADER]);
+      expect([...readFileSync(join(projectRoot, sourceRelativePath))]).toEqual([...MP4_HEADER]);
+    });
+  });
+
+  test("keeps the source asset untouched when export fails", async () => {
+    await withProject(async (projectRoot) => {
+      const sourceRelativePath = "assets/videos/job-fail/0.mp4";
+      const sourcePath = join(projectRoot, sourceRelativePath);
+      await writeAtomic(sourcePath, MP4_HEADER);
+      // 用同名目录制造真实文件系统失败，不 mock 写盘。
+      mkdirSync(join(projectRoot, "outputs/final-job-fail.mp4"), { recursive: true });
+
+      await expect(exportCompletedVideoFile({
+        projectRoot,
+        jobId: "job-fail",
+        sourceRelativePath
+      })).rejects.toThrow();
+
+      expect(existsSync(sourcePath)).toBe(true);
+      expect([...readFileSync(sourcePath)]).toEqual([...MP4_HEADER]);
+    });
   });
 });
 

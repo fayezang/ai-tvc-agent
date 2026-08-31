@@ -22,6 +22,7 @@ import type {
 import { pricedResolutions } from "@shared/orz-pricing";
 import { isTerminalVideoTaskState } from "@shared/video-task-states";
 import { useUiStore } from "../store/ui-store";
+import { resolveAgentPanelSelection } from "./agent-panel-selection";
 import { Button } from "./ui/button";
 
 type ToolJsonValue = string | number | boolean | null | ToolJsonValue[] | { readonly [key: string]: ToolJsonValue };
@@ -182,6 +183,35 @@ interface AgentPanelProps {
   onProjectChanged(): Promise<void> | void;
 }
 
+const FullVideoFlowSteps = ({ currentStep }: { currentStep: 1 | 2 | 3 }): React.JSX.Element => {
+  const steps = ["完整视频 Prompt", "确认生成"] as const;
+  return (
+    <ol aria-label="最终视频生成步骤" className="mt-3 grid grid-cols-2 gap-1.5">
+      {steps.map((label, index) => {
+        const step = (index + 1) as 1 | 2;
+        const completed = currentStep > step;
+        const active = currentStep === step;
+        return (
+          <li
+            key={label}
+            aria-current={active ? "step" : undefined}
+            className={`rounded-lg border px-2 py-2 text-center text-[10px] leading-4 ${
+              active
+                ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                : completed
+                  ? "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
+                  : "border-[var(--border)] text-[var(--muted)]"
+            }`}
+          >
+            <span className="block font-medium">{completed ? "✓" : step}</span>
+            <span className="block">{label}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+};
+
 export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectChanged }: AgentPanelProps): React.JSX.Element {
   const width = useUiStore((state) => state.agentPanelWidth);
   const setWidth = useUiStore((state) => state.setAgentPanelWidth);
@@ -200,7 +230,7 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
   const [isRunning, setIsRunning] = useState(false);
   const [workflowState, setWorkflowState] = useState<AgentWorkflowState | null>(null);
   const [workflowBusy, setWorkflowBusy] = useState<
-    "brief" | "script" | "storyboard-images" | "video-prompt" | "video-prepare" | "video-approve" | "video-discard" | null
+    "brief" | "script" | "storyboard-images" | "video-prompt" | "video-prepare" | "video-approve" | "video-export" | null
   >(null);
   const [workflowError, setWorkflowError] = useState("");
   const [selectedDirectionIndex, setSelectedDirectionIndex] = useState<number | null>(null);
@@ -216,29 +246,15 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
   const [videoModelId, setVideoModelId] = useState<string | null>(null);
   const streamingId = useRef<string | null>(null);
   const workflowLoadId = useRef(0);
+  const activeVideoJobId = useRef<string | null>(null);
+  const videoApprovalRef = useRef<HTMLDivElement>(null);
+  const autoQuoteKeyRef = useRef<string | null>(null);
   const selectedNodes = useMemo(
     () => canvasNodes.filter((node) => selectedNodeIds.includes(node.id)),
     [canvasNodes, selectedNodeIds]
   );
-  const latestScript = useMemo(
-    () => [...canvasNodes]
-      .filter((node) => node.kind === "script")
-      .sort((a, b) => (b.scriptVersion ?? 1) - (a.scriptVersion ?? 1))[0],
-    [canvasNodes]
-  );
-  const selectedScripts = useMemo(
-    () => selectedNodes.filter((node) => node.kind === "script"),
-    [selectedNodes]
-  );
-  const selectedFrames = useMemo(
-    () => selectedNodes.filter((node) => node.kind === "storyboard-frame"),
-    [selectedNodes]
-  );
-  const activeScript = selectedScripts.length === 1
-    ? selectedScripts[0]
-    : selectedScripts.length > 1
-      ? undefined
-      : latestScript;
+  const actionSelection = useMemo(() => resolveAgentPanelSelection(selectedNodes), [selectedNodes]);
+  const activeScript = actionSelection.mode === "script" ? actionSelection.script : undefined;
   const needsBriefRestatement = useMemo(
     () => canvasNodes.some((node) => node.kind === "brief" && node.status === "draft"),
     [canvasNodes]
@@ -326,12 +342,9 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
         );
       }
       if (event.type === "video-job") {
-        // 由 Utility Process 主动推送：启动恢复找回的任务，以及轮询器的
-        // 每次状态更新。面板此前只认自己提交的那一个任务，重启后恢复回来的
-        // 任务无处显示。
-        setVideoJob((current) =>
-          current === null || current.id === event.job.id ? event.job : current
-        );
+        // 只接收当前脚本上下文创建的任务；切换脚本后，旧轮询推送不能让旧任务
+        // 和旧报价重新出现在新脚本的操作卡里。
+        setVideoJob((current) => activeVideoJobId.current === event.job.id ? event.job : current);
       }
       if (event.type === "project-changed") void onProjectChanged();
       }),
@@ -475,62 +488,28 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
     }
   };
 
-  const generateStoryboardImages = async (): Promise<void> => {
-    if (!activeScript || isRunning || workflowBusy) return;
-    const assistantId = crypto.randomUUID();
-    setWorkflowBusy("storyboard-images");
-    setWorkflowError("");
-    setIsRunning(true);
-    setMessages((current) => [
-      ...current,
-      {
-        id: assistantId,
-        role: "assistant",
-        text: `已确认${activeScript.title}，正在逐行使用第三列英文 Prompt 生成独立静态效果图…`
-      }
-    ]);
-    try {
-      const reply = await window.agentApp.agent.generateStoryboardImages({
-        projectRoot,
-        scriptNodeId: activeScript.id
-      });
-      setMessages((current) =>
-        current.map((message) => (message.id === assistantId ? { ...message, text: reply.text } : message))
-      );
-      await onProjectChanged();
-      await loadWorkflowState();
-    } catch (error) {
-      const message = cleanRemoteError(error);
-      setWorkflowError(message);
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistantId ? { ...item, text: `生成静态分镜失败：${message}` } : item
-        )
-      );
-    } finally {
-      setWorkflowBusy(null);
-      setIsRunning(false);
-    }
-  };
-
   const generateFullVideoPrompt = async (): Promise<void> => {
-    if (!activeScript || selectedFrames.length === 0 || isRunning || workflowBusy) return;
+    if (!activeScript || isRunning || workflowBusy) return;
     const assistantId = crypto.randomUUID();
     setWorkflowBusy("video-prompt");
     setWorkflowError("");
     setIsRunning(true);
     setMessages((current) => [
       ...current,
-      { id: assistantId, role: "assistant", text: `正在读取 ${selectedFrames.length} 张实际图片并合成为完整视频 Prompt…` }
+      { id: assistantId, role: "assistant", text: `正在读取 ${activeScript.title} 的完整五列表格并转译为整片视频 Prompt…` }
     ]);
     try {
       const result = await window.agentApp.agent.generateVideoPrompt({
         projectRoot,
-        scriptNodeId: activeScript.id,
-        imageNodeIds: selectedFrames.map((node) => node.id)
+        scriptNodeId: activeScript.id
       });
+      if (videoPreparation) {
+        void window.agentApp.video.discard(videoPreparation.job.id).catch(() => undefined);
+      }
       setVideoPromptResult(result);
       setVideoPromptDraft(result.prompt);
+      autoQuoteKeyRef.current = null;
+      activeVideoJobId.current = null;
       setVideoJob(null);
       // 新 Prompt 是一份新请求，旧报价绝不能沿用。
       setVideoPreparation(null);
@@ -544,6 +523,42 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
       setWorkflowError(message);
       setMessages((current) => current.map((item) =>
         item.id === assistantId ? { ...item, text: `生成完整视频 Prompt 失败：${message}` } : item
+      ));
+    } finally {
+      setWorkflowBusy(null);
+      setIsRunning(false);
+    }
+  };
+
+  const generateStoryboardImages = async (): Promise<void> => {
+    if (!activeScript || isRunning || workflowBusy) return;
+    const assistantId = crypto.randomUUID();
+    setWorkflowBusy("storyboard-images");
+    setWorkflowError("");
+    setIsRunning(true);
+    setMessages((current) => [
+      ...current,
+      {
+        id: assistantId,
+        role: "assistant",
+        text: `正在按 ${activeScript.title} 第三列英文 Prompt 生成独立静态效果图…`
+      }
+    ]);
+    try {
+      const reply = await window.agentApp.agent.generateStoryboardImages({
+        projectRoot,
+        scriptNodeId: activeScript.id
+      });
+      setMessages((current) => current.map((message) =>
+        message.id === assistantId ? { ...message, text: reply.text } : message
+      ));
+      await onProjectChanged();
+      await loadWorkflowState();
+    } catch (error) {
+      const message = cleanRemoteError(error);
+      setWorkflowError(message);
+      setMessages((current) => current.map((item) =>
+        item.id === assistantId ? { ...item, text: `生成静态效果图失败：${message}` } : item
       ));
     } finally {
       setWorkflowBusy(null);
@@ -579,21 +594,14 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
         duration: videoPromptResult.duration,
         aspectRatio: videoPromptResult.aspectRatio,
         resolution,
-        referenceImageUrls: videoPromptResult.referenceImageUrls,
+        referenceImageUrls: [],
         referenceVideoUrls: [],
         referenceAudioUrls: [],
         generateAudio: true
       });
       setVideoPreparation(preparation);
+      activeVideoJobId.current = preparation.job.id;
       setVideoJob(preparation.job);
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          text: "报价已准备好。请核对金额与参数；点击“确认支付并生成”后才会向 ORZ 提交并产生费用。"
-        }
-      ]);
     } catch (error) {
       setWorkflowError(cleanRemoteError(error));
     } finally {
@@ -628,17 +636,16 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
     }
   };
 
-  const discardPreparedVideo = async (): Promise<void> => {
-    if (!videoPreparation || isRunning || workflowBusy) return;
-    setWorkflowBusy("video-discard");
+  const exportCompletedVideo = async (): Promise<void> => {
+    if (!videoJob || videoJob.state !== "completed" || workflowBusy) return;
+    setWorkflowBusy("video-export");
     setWorkflowError("");
     try {
-      const job = await window.agentApp.video.discard(videoPreparation.job.id);
-      setVideoJob(job);
-      setVideoPreparation(null);
+      const result = await window.agentApp.video.exportCompleted(videoJob.id);
+      if (!result) return;
       setMessages((current) => [
         ...current,
-        { id: crypto.randomUUID(), role: "assistant", text: "已放弃本次生成，没有向 ORZ 提交任务，也不会产生费用。" }
+        { id: crypto.randomUUID(), role: "assistant", text: `已导出完整视频：${result.outputPath}` }
       ]);
     } catch (error) {
       setWorkflowError(cleanRemoteError(error));
@@ -691,6 +698,67 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
   }, [videoPromptResult, videoResolution]);
 
   const availableVideoResolutions = videoModelId ? pricedResolutions(videoModelId) : [];
+
+  const hasSubmittedVideoJob = Boolean(
+    videoJob && (isTerminalVideoTaskState(videoJob.state) || videoJob.state !== "awaiting-approval")
+  );
+  const videoFlowStep: 1 | 2 | 3 = hasSubmittedVideoJob ? 3 : videoPromptResult ? 2 : 1;
+
+  useEffect(() => {
+    if (
+      !videoPromptResult ||
+      !videoPromptDraft.trim() ||
+      videoPreparation ||
+      hasSubmittedVideoJob ||
+      workflowBusy !== null ||
+      isRunning
+    ) return;
+
+    const quoteKey = [
+      videoPromptResult.scriptNodeId,
+      videoPromptDraft.trim(),
+      videoResolution
+    ].join("\u0000");
+    if (autoQuoteKeyRef.current === quoteKey) return;
+
+    const timer = window.setTimeout(() => {
+      autoQuoteKeyRef.current = quoteKey;
+      void prepareFullVideo();
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [
+    hasSubmittedVideoJob,
+    isRunning,
+    videoPreparation,
+    videoPromptDraft,
+    videoPromptResult,
+    videoResolution,
+    workflowBusy
+  ]);
+
+  useEffect(() => {
+    const target = videoPreparation ? videoApprovalRef.current : null;
+    if (!target) return;
+    const frame = window.requestAnimationFrame(() => {
+      target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [reducedMotion, videoPreparation, videoPromptResult]);
+
+  useEffect(() => {
+    // 脚本选择是后续 Prompt、报价和任务的身份边界。切到另一版本或取消选择时，
+    // 旧状态必须全部清掉，绝不能拿 V2 的报价提交 V3。
+    if (videoPreparation) {
+      void window.agentApp.video.discard(videoPreparation.job.id).catch(() => undefined);
+    }
+    setVideoPromptResult(null);
+    setVideoPromptDraft("");
+    setVideoPreparation(null);
+    setVideoJob(null);
+    activeVideoJobId.current = null;
+    autoQuoteKeyRef.current = null;
+    setWorkflowError("");
+  }, [activeScript?.id]);
 
   return (
     <motion.aside
@@ -825,64 +893,66 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
             </Button>
           </section>
         ) : null}
-        {selectedScripts.length > 1 ? (
+        {actionSelection.mode === "multiple-scripts" ? (
           <p className="mb-3 rounded-lg border border-[var(--danger)]/40 bg-[var(--canvas)] px-3 py-2 text-xs leading-5 text-[var(--danger)]">
-            请选择至多一个脚本节点。选中一个脚本时，它会作为生图或完整视频的当前版本。
+            只能选择一个脚本版本生成最终视频；请取消多余选择后重试。
           </p>
         ) : null}
-        {activeScript ? (
-          <section className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--canvas)] p-3">
-            <div className="flex items-start gap-2.5">
-              <Check className="mt-0.5 size-4 shrink-0 text-[var(--accent)]" />
-              <div>
-                <h3 className="text-sm font-medium">{activeScript.title}</h3>
-                <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-                  按当前脚本快照逐镜生成独立静态图；第三列英文 Prompt 会原样传给图片模型。
-                </p>
-              </div>
-            </div>
-            <Button
-              className="mt-3 w-full"
-              disabled={isRunning || selectedScripts.length > 1}
-              onClick={() => void generateStoryboardImages()}
-            >
-              {workflowBusy === "storyboard-images" ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-              脚本确认 开始生成
-            </Button>
-          </section>
-        ) : null}
-        {selectedFrames.length > 0 ? (
+        {actionSelection.mode === "script" ? (
           <section className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--canvas)] p-3">
             <div className="flex items-start gap-2.5">
               <Film className="mt-0.5 size-4 shrink-0 text-[var(--accent)]" />
               <div>
-                <h3 className="text-sm font-medium">组合完整视频</h3>
+                <h3 className="text-sm font-medium">脚本操作 · {actionSelection.script.title}</h3>
                 <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-                  已选择 {selectedFrames.length} 张图。必须覆盖当前脚本全部镜头，且每个镜头恰好一张；系统会读取实际图片、Audio/SFX 与 VO。
+                  静态效果图用于打磨脚本；完整视频可直接从当前脚本生成。两条流程彼此独立。
                 </p>
               </div>
             </div>
-            <Button
-              className="mt-3 w-full"
-              disabled={isRunning || !activeScript || selectedScripts.length > 1}
-              onClick={() => void generateFullVideoPrompt()}
-            >
-              {workflowBusy === "video-prompt" ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-              生成完整视频 Prompt
-            </Button>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Button
+                variant="outline"
+                disabled={isRunning}
+                onClick={() => void generateStoryboardImages()}
+              >
+                {workflowBusy === "storyboard-images"
+                  ? <LoaderCircle className="size-4 animate-spin" />
+                  : <Sparkles className="size-4" />}
+                生成静态效果图
+              </Button>
+              <Button
+                disabled={isRunning || hasSubmittedVideoJob}
+                onClick={() => void generateFullVideoPrompt()}
+              >
+                {workflowBusy === "video-prompt"
+                  ? <LoaderCircle className="size-4 animate-spin" />
+                  : <Film className="size-4" />}
+                生成完整视频
+              </Button>
+            </div>
           </section>
         ) : null}
-        {videoPromptResult ? (
+        {videoPromptResult && actionSelection.mode === "script" ? (
           <section className="mb-3 rounded-xl border border-[var(--accent)]/50 bg-[var(--canvas)] p-3">
-            <label className="grid gap-1.5 text-xs text-[var(--muted)]">
-              完整视频 Prompt（生成前可编辑）
+            <FullVideoFlowSteps currentStep={videoFlowStep} />
+            <label className="mt-3 grid gap-1.5 text-xs text-[var(--muted)]">
+              第 1 步 · 完整视频 Prompt（生成前可编辑）
               <textarea
                 value={videoPromptDraft}
-                disabled={videoPreparation !== null || workflowBusy === "video-approve"}
+                disabled={workflowBusy === "video-approve"}
                 onChange={(event) => {
                   setVideoPromptDraft(event.target.value);
                   // 改了文字，旧报价就不可信了；用户必须重新准备报价。
-                  if (videoPreparation) setVideoPreparation(null);
+                  if (videoPreparation) {
+                    const staleJobId = videoPreparation.job.id;
+                    autoQuoteKeyRef.current = null;
+                    setVideoPreparation(null);
+                    setVideoJob(null);
+                    activeVideoJobId.current = null;
+                    void window.agentApp.video.discard(staleJobId).catch((error: unknown) =>
+                      setWorkflowError(cleanRemoteError(error))
+                    );
+                  }
                 }}
                 rows={8}
                 className="resize-y rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs leading-5 text-[var(--text)] outline-none focus:border-[var(--focus)]"
@@ -894,8 +964,20 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
                 分辨率
                 <select
                   value={videoResolution}
-                  disabled={videoPreparation !== null || availableVideoResolutions.length === 0}
-                  onChange={(event) => setVideoResolution(event.target.value as "480p" | "720p" | "1080p")}
+                  disabled={availableVideoResolutions.length === 0 || workflowBusy === "video-approve"}
+                  onChange={(event) => {
+                    setVideoResolution(event.target.value as "480p" | "720p" | "1080p");
+                    if (videoPreparation) {
+                      const staleJobId = videoPreparation.job.id;
+                      autoQuoteKeyRef.current = null;
+                      setVideoPreparation(null);
+                      setVideoJob(null);
+                      activeVideoJobId.current = null;
+                      void window.agentApp.video.discard(staleJobId).catch((error: unknown) =>
+                        setWorkflowError(cleanRemoteError(error))
+                      );
+                    }
+                  }}
                   className="rounded border border-[var(--border)] bg-[var(--surface)] px-1.5 py-0.5 text-[11px] text-[var(--text)]"
                 >
                   {availableVideoResolutions.map((resolution) => <option key={resolution} value={resolution}>{resolution}</option>)}
@@ -903,46 +985,57 @@ export function AgentPanel({ projectRoot, canvasNodes, initialNotice, onProjectC
               </label>
             </div>
             {videoPreparation ? (
-              <div className="mt-3 rounded-lg border border-[var(--warning)]/50 bg-[var(--warning-soft)] p-3 text-xs leading-5 text-[var(--text)]">
-                <p className="font-medium">请确认本次付费生成</p>
-                <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[var(--muted)]">
-                  <dt>模型</dt><dd className="text-right text-[var(--text)]">{videoPreparation.estimate.modelId}</dd>
-                  <dt>分辨率</dt><dd className="text-right text-[var(--text)]">{videoResolution}</dd>
-                  <dt>计费时长</dt><dd className="text-right text-[var(--text)]">{videoPreparation.estimate.billedSeconds}s</dd>
-                  <dt>单价</dt><dd className="text-right text-[var(--text)]">{videoPreparation.estimate.amountPerSecond === null ? "无法估算" : `¥${videoPreparation.estimate.amountPerSecond}/秒`}</dd>
-                  <dt>预计费用</dt><dd className="text-right font-medium text-[var(--text)]">{videoPreparation.estimate.amount === null ? "无法估算" : `¥${videoPreparation.estimate.amount}`}</dd>
-                  <dt>价格日期</dt><dd className="text-right text-[var(--text)]">{videoPreparation.estimate.pricingFetchedAt}</dd>
-                </dl>
-                {videoPreparation.estimate.adjustments.length > 0 ? (
-                  <ul className="mt-2 list-disc pl-4 text-[var(--muted)]">
-                    {videoPreparation.estimate.adjustments.map((adjustment) => <li key={adjustment}>{adjustment}</li>)}
-                  </ul>
-                ) : null}
-                <p className="mt-2 text-[11px] text-[var(--muted)]">{videoPreparation.estimate.note}</p>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <Button variant="outline" disabled={workflowBusy !== null} onClick={() => void discardPreparedVideo()}>放弃，不产生费用</Button>
-                  <Button disabled={workflowBusy !== null || videoPreparation.estimate.amount === null} onClick={() => void approveFullVideo()}>
-                    {workflowBusy === "video-approve" ? <LoaderCircle className="size-4 animate-spin" /> : <Check className="size-4" />}
-                    确认支付并生成
-                  </Button>
-                </div>
+              <div ref={videoApprovalRef} className="mt-3">
+                <p className="mb-1.5 text-right text-[11px] text-[var(--muted)]">
+                  本次生成总价：
+                  <span className="font-medium text-[var(--text)]">
+                    {videoPreparation.estimate.amount === null ? "无法估算" : `¥${videoPreparation.estimate.amount}`}
+                  </span>
+                </p>
+                <Button
+                  className="w-full"
+                  disabled={workflowBusy !== null || videoPreparation.estimate.amount === null}
+                  onClick={() => void approveFullVideo()}
+                >
+                  {workflowBusy === "video-approve" ? <LoaderCircle className="size-4 animate-spin" /> : <Check className="size-4" />}
+                  第 2 步 · 确认生成
+                </Button>
+                <p className="mt-1.5 text-center text-[10px] leading-4 text-[var(--muted)]">
+                  点击确认后才会向 ORZ 提交任务并产生费用
+                </p>
               </div>
-            ) : (
-              <Button
-                className="mt-3 w-full"
-                disabled={isRunning || !videoPromptDraft.trim() || availableVideoResolutions.length === 0 || (videoJob !== null && !isTerminalVideoTaskState(videoJob.state))}
-                onClick={() => void prepareFullVideo()}
-              >
-                {workflowBusy === "video-prepare" ? <LoaderCircle className="size-4 animate-spin" /> : <Film className="size-4" />}
-                查看报价
-              </Button>
+            ) : hasSubmittedVideoJob ? null : (
+              <div className="mt-3 text-center">
+                <p className="text-[11px] text-[var(--muted)]">
+                  {workflowBusy === "video-prepare" ? "正在计算本次生成总价…" : "正在准备本次生成总价…"}
+                </p>
+                {workflowError && workflowBusy === null ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => {
+                      autoQuoteKeyRef.current = null;
+                      void prepareFullVideo();
+                    }}
+                  >
+                    重新计算总价
+                  </Button>
+                ) : null}
+              </div>
             )}
-            {videoJob ? (
+            {videoJob && !videoPreparation ? (
               <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2.5 text-xs leading-5 text-[var(--muted)]">
                 <p>视频任务：{videoJob.state}{videoJob.progress === null ? "" : ` · ${Math.round(videoJob.progress * 100)}%`}</p>
                 {videoJob.stage ? <p>{videoJob.stage}</p> : null}
                 {videoJob.error?.message ? <p className="text-[var(--danger)]">{videoJob.error.message}</p> : null}
                 {videoJob.outputUrls[0] ? <video className="mt-2 w-full rounded-lg" src={videoJob.outputUrls[0]} controls /> : null}
+                {videoJob.state === "completed" && videoJob.localPaths.length > 0 ? (
+                  <Button className="mt-2 w-full" disabled={workflowBusy !== null} onClick={() => void exportCompletedVideo()}>
+                    {workflowBusy === "video-export" ? <LoaderCircle className="size-4 animate-spin" /> : <Film className="size-4" />}
+                    导出已完成视频
+                  </Button>
+                ) : null}
               </div>
             ) : null}
           </section>

@@ -1,8 +1,8 @@
-# 第四批启动包 · 导出与交片
+# 第四批启动包 · 最终整片生成与交付闭环
 
 > **用途**：在新对话中启动第四批开发的唯一入口。
-> 把本文件路径发给新的开发 Agent，要求它先完整读取本文件与其中列出的必读项，再检查代码。
-> 不要重新讨论已经固定的产品定位、技术栈与视频底座选型。
+> 本文件以 2026-08-31 用户再次确认的真实产品流程为准，替代此前“逐镜视频生成 →
+> trim → ffmpeg 拼接”的旧计划。不要沿用旧计划继续实现逐镜视频拼接。
 
 ---
 
@@ -11,13 +11,13 @@
 ```
 请完整读取 docs/BATCH-4-KICKOFF.md 及其中列出的必读文件，然后检查真实代码状态。先输出：
 1. 已读取的基线与已完成范围；
-2. 第四批各项的当前代码位置与现状；
-3. D0 音频决策你建议选哪个方案，以及理由；
-4. 你计划的实施顺序与每项的验证方法。
-等我确认 D0 后再开始实现，不重新发散范围。
+2. 当前实现与本文件确认流程之间的差异；
+3. D1-D4 的实施顺序、改动位置与验证方法。
+确认没有把静态图当作最终视频必需输入、没有把整片拆成逐镜视频后，再开始实现。
 ```
 
-**注意 D0 是产品决策，必须等用户确认再动手。** 它决定 D2 的滤镜图要不要混音分支。
+本批没有等待确认的 ffmpeg 或混音方案。产品主链路已经确认：**选择一个最终脚本，
+由大模型转译成一整段视频 Prompt，一次提交一条完整时长的视频任务。**
 
 ---
 
@@ -25,206 +25,238 @@
 
 | 文件 | 为什么必读 |
 |---|---|
-| 本文件 | 范围、约束、验收 |
-| `docs/TVC_AGENT.md` | 当前产品范围与已知断点（已对齐真实代码，可信） |
-| `docs/decisions/0001-video-backend.md` | **附录含完整 ffmpeg 滤镜图与命令序列，D2 直接复用** |
-| `docs/BATCH-3-KICKOFF.md` | 第三批已完成范围，不要重做 |
-| `src/utility/video-assets.ts` | 视频落盘现状；导出要读它落的文件 |
-| `src/utility/index.ts:178` | `video.renderProject` 抛错占位处，D2 主战场 |
-| `src/shared/contracts.ts:527` | `renderProject` 已有契约签名 |
-| `src/utility/migrations.ts` | 加表加列的唯一正确方式，下一个编号是 `0004` |
-| `tests/reference-upload-cache.test.ts` | 测试风格范本（真实 HTTP、真实目录、零 mock、含可失败性验证） |
+| 本文件 | 新的产品流程、范围与验收；覆盖旧版第四批计划 |
+| `docs/TVC_AGENT.md` | 当前实现与安全边界；其中“导出未实现”描述的是现状，不代表必须用 ffmpeg |
+| `docs/BATCH-3-KICKOFF.md` | 第三批已完成范围，尤其是报价与付费前确认，不要重做 |
+| `src/renderer/src/components/agent-panel.tsx` | 当前错误的双入口、脚本自动回退与整片生成 UI |
+| `src/renderer/src/components/storyboard-image-node.tsx` | 静态图 Prompt 编辑、重新生成与应用到新脚本版本 |
+| `src/utility/agent-service.ts:640` | 静态图生成、脚本版本应用与完整视频 Prompt 转译现状 |
+| `src/utility/workflow-service.ts:284` | V2 / V3 / V4 创建与版本继承 |
+| `src/shared/contracts.ts:415` | 当前错误地强制 `imageNodeIds` 的视频 Prompt 契约 |
+| `src/utility/job-service.ts` | 一条完整视频任务的报价、提交、恢复与落盘能力 |
+| `src/utility/video-assets.ts` | 完整视频已经具备下载、校验与原子落盘能力 |
+| `tests/structured-confirmation-ui.test.ts` | 当前测试把旧错误流程写成了断言，必须随实现一起改 |
 
-Notion 规范：《现成能力调用规范 v2（ORZ 底座）》§3.5 输入契约、§3.9 导出
-`https://www.notion.so/3ccd29abbde880909800e64037cb85fb`
+Notion 规范仍是参考，但当其逐镜拼接描述与本文件冲突时，以本次用户确认的产品流程为准。
 
 ---
 
-## 已固定的决策（不要重新讨论）
+## 已固定的产品流程（不要重新讨论）
 
-1. **视频底座 = ORZ 自建适配器**，不接 fal.ai，不移植 CutAgent 运行时代码。
-2. **视频模型只有 Seedance（默认）与 Kling 两个。** Veo（`0476b3f`）与 Hailuo（`3d9a1bc`）
-   已按「选便宜的」决策移除。规范 §3.3 列了四个，那份清单已过期 ——
-   **不要把 Veo / Hailuo 当缺口重新实现。**
-3. **零 mock 数据**：拿不到真实值就返回 `null` 或抛出明确错误。
-   测试不 mock fs、不 mock 网络 —— 用 `Bun.serve` 起真实 HTTP，用 `mkdtemp` 用真实目录。
-4. **一阶段一提交**：`tsc` 双配置通过 + `bun test` 全绿 + `git commit`，
-   出错则 `git reset --hard` 回上个良好点。
-5. **ffmpeg 禁止 CDN 加载**，用 `ffmpeg-static` + `ffprobe-static` 打包平台原生二进制，
-   通过 `child_process` 在 Utility Process 调用。
-6. **画布交互（§2 全部）属第五批**，本轮不做。
+### 1. 静态图只服务于脚本打磨
+
+文字脚本生成后，系统按每一行第三列英文 Prompt 生成独立静态效果图。
+
+用户点击一张静态图后可以：
+
+- 查看并编辑这张图的 Prompt；
+- 使用新 Prompt 重新生成这张图，旧图片版本继续保留；
+- 把当前 Prompt 应用到一个新的完整脚本版本。
+
+静态图是视觉检查和 Prompt 迭代工具，**不是最终生视频的必选输入，也不是默认参考图**。
+
+### 2. 脚本版本必须连续、累积迭代
+
+正确关系是：
+
+```
+脚本 V1 → 脚本 V2 → 脚本 V3 → 脚本 V4
+```
+
+每次“应用到新脚本版本”都以当前最新脚本为基础，只替换对应镜头的第三列 Prompt；
+其他镜头、时长、Audio & SFX、VO 原样保留。不得出现 V2、V3、V4 都从 V1 分叉的情况。
+
+应用静态图 Prompt 时直接写入新脚本，不在这里提前做“静态图 Prompt → 单镜视频 Prompt”转译。
+整份脚本只在最终生视频前统一转译一次。
+
+### 3. 操作入口跟随明确选择
+
+- 选中静态图：图片节点内显示 Prompt 编辑、重新生成、应用新脚本版本；右侧不显示脚本生成或视频生成按钮。
+- 未选中脚本：右侧不自动拿“最新脚本”代替用户选择。
+- 恰好选中一个脚本：右侧只出现一个主入口，例如“按照脚本 V3 生成最终视频”。
+- 同时选中多个脚本：明确提示只能选择一个，不猜测使用哪一个。
+
+“脚本确认 开始生成”和“组合完整视频”不能再像当前截图一样同时常驻。
+静态效果图生成属于脚本打磨阶段，不与最终视频入口并列。
+
+### 4. 最终视频一次生成整片
+
+```
+选中最终脚本
+  → 大模型读取完整五列表格与项目时长/画幅
+  → 转译成一整段可编辑的视频 Prompt
+  → 查看真实报价
+  → 用户确认支付
+  → 向 ORZ 提交一条完整时长的视频任务
+  → 完成后下载、校验、保存并导出 MP4
+```
+
+5 秒项目一次生成完整 5 秒视频，8 秒项目一次生成完整 8 秒视频。
+不是“逐镜生视频 → 拼接”，也不要求先选齐静态图。
 
 ---
 
 ## 第一至三批已完成（不要重做）
 
-commit `a4ca27e` → `282d933`，已全部推送 `origin/main`。
-**184 项测试全绿（21 文件），两侧 `tsc --noEmit` 无错误。**
+commit `a4ca27e` → `282d933` 已推送 `origin/main`。
+当前基线为 **184 项测试（21 文件）全绿，两侧 `tsc --noEmit` 无错误**。
 
-- 第一批：migrations、视频落盘（`downloading` → `validating` → `completed`）、
-  `deleteNodes` 清理磁盘、`currency` 改 `CNY`
-- 第二批：13 态状态机、启动恢复（`job-recovery.ts`）、
-  轮询下沉（`job-poller.ts`，3s→15s 退避）、重试链（`parent_job_id` / `root_job_id` / `attempt`）
-- 第三批：价格表（`orz-pricing.ts`）、真实金额估算（`video-estimate.ts`）、
-  提交前两步确认（`prepare` / `approve` / `discard`）、链路成本按快照归集
-- 第 3.5 批：删 deprecated retry 重载、重写 `TVC_AGENT.md`、
-  补 Prompt 一致性测试（6 项）、补参考图缓存测试（7 项）
+- 第一批：migrations、视频落盘、删除节点清理磁盘、币种修正；
+- 第二批：13 态状态机、启动恢复、Utility Process 轮询、重试链；
+- 第三批：真实价格表、估价、`prepare / approve / discard` 两步付费确认、链路成本；
+- 第 3.5 批：Prompt 一致性、参考图 sha256 上传缓存与文档对齐。
 
-**参考图 sha256 缓存已实现**（`agent-service.ts` 的 `uploadLocalImage`，
-缓存落 `assets/references/uploads.json`），符合规范 §3.2，有测试守住。不要重做。
+这些基础能力继续复用。尤其不得合并 `prepare` 与 `approve`：生成视频会真实计费，
+用户必须先看到报价再确认。
 
 ---
 
-## 本批要解决的核心问题
+## 当前实现与确认流程的差异
 
-**现在这个产品能生成视频，但交不出片。**
-
-`video.renderProject`（`utility/index.ts:178`）直接抛错：
-「基础 MP4 合成将在视频生成闭环阶段启用；当前未执行任何伪导出。」
-
-IPC 骨架其实已经通了 —— `contracts.ts:527` 有签名，`preload/index.ts:87` 有转发，
-`ipc-channels.ts:40` 有频道名。**只有 utility 层的实现是空的。**
-
-用户走完 Brief → 创意 → 脚本 → 分镜 → 视频，拿到的是一堆散落的单镜 MP4，
-没有一个能交付的成片。这是从「能演示」到「能交片」之间唯一的坎。
+1. `agent-panel.tsx` 在没有选中脚本时自动回退到最新脚本，所以选中静态图也会出现脚本操作卡。
+2. 选中静态图又会显示“组合完整视频”，造成截图中的两个错误入口。
+3. `applyStoryboardImage` 默认使用图片最初所属脚本，反复应用可能得到 `V1 → V2`、`V1 → V3`，而非连续版本。
+4. 应用图片时会先调用文本模型，把单张静态图 Prompt 转成单镜视频 Prompt；转译时机过早。
+5. `GenerateVideoPromptRequestSchema` 强制携带 `imageNodeIds`。
+6. `generateVideoPrompt` 强制每个镜头恰好选择一张图，并读取、上传这些图片作为视频参考。
+7. 正确部分应保留：当前 `prepareFullVideo` 已经只提交一条完整项目时长的视频任务，而不是多条单镜任务。
 
 ---
 
 ## 第四批范围（四项）
 
-### D0 · 音频链路决策（**先等用户确认，不要自己定**）
+### D1 · 修正脚本版本迭代
 
-**问题**：`audio` 节点入口已经对用户开放，但底层什么都没有。
-
-证据：
-- `NodeKindSchema` 有 `"audio"`（`contracts.ts:18`）
-- `node-creator.tsx:10` 给了「旁白与音乐」按钮
-- `project-service.ts:40` 有中文标签
-- 但 `ORZ_MODELS` 里**没有任何 TTS 或音乐模型**
-- `src/utility/` 全域**零音频生成实现**
-
-用户现在能建这个节点，建完什么都不会发生。
-
-**连带影响**：`docs/decisions/0001` 附录里的混音命令
-（`[vo][bg]amix=inputs=2:duration=first[aout]`）**无源可混**。
-D2 导出到底做几路音频，取决于这里怎么定。
-
-两个方案：
-
-| 方案 | 做法 | 代价 |
-|---|---|---|
-| **A · 补模型** | 在 `ORZ_MODELS` 加 TTS 与音乐模型，实现音频生成链路 | 工作量大，且需先确认 ORZ 是否提供、价格多少（价格表要同步扩） |
-| **B · 摘掉入口** | 按 `0002-project-entry-points` 的先例移除 `audio` 节点入口，导出只做纯视频拼接 + 保留模型原生音轨 | 快，但产品少一块能力 |
-
-**建议 B**，理由：规范 §3.9 已把「可选择保留模型原生音频」列入 MVP 范围，
-Seedance 与 Kling 都能生成原生音轨，纯视频拼接 + 原生音轨已构成可交付成片。
-补 TTS 是独立能力，不该阻塞导出。
-
-选 B 时必须：摘入口、在 `TVC_AGENT.md` 记明原因、
-在 `0001` 附录旁注「混音命令暂无源，待音频链路补齐后启用」。
-
-### D1 · trim 机制
-
-规范 §3.5 硬规则：
-
-> 脚本镜头时长与模型可生成时长不是同一概念。模型可输出更长素材，
-> 再通过 `trimStart` 和 `trimEnd` 裁到脚本时长。**系统不得静默改变脚本总时长。**
-
-现状：`trimStart` / `trimEnd` 全代码零实现，只有 `video-estimate.ts:74` 一句注释提到
-「裁剪由 trimStart / trimEnd 完成」—— 那个注释目前是空头承诺。
-
-为什么必需：Kling 只有 5 / 10 秒离散档，脚本要 7 秒时会生成 10 秒素材。
-不裁就是把 10 秒塞进 7 秒的位置，成片总时长必然超出脚本。
-第三批的 `normalizeVideoParams` 已经在 `adjustments` 里记录了「取 10 秒档」这件事，
-但没人把多出来的 3 秒裁掉。
+目标：让静态图迭代真正产生连续、可追溯、累积修改的完整脚本版本。
 
 要求：
-- trim 值存在哪里要先定：`video_jobs` 加列（migration `0004`），
-  还是存在节点 manifest 里。选前者更一致（估价快照就是这么存的）。
-- **默认值不能猜**。生成 10 秒、脚本要 7 秒时，裁头还是裁尾？
-  建议默认 `trimStart = 0`、`trimEnd = billedSeconds - requestedSeconds`（保留开头），
-  但要允许用户调整，且**界面必须显示实际用了哪一段**。
-- 纯数据层实现 + 纯函数测试，不依赖 ffmpeg。D2 消费它。
 
-### D2 · ffmpeg 导出
+- “应用到新脚本版本”默认以当前最新脚本版本为基础；
+- 只替换这张静态图对应镜头的第三列 Prompt；
+- 直接采用用户当前选中的图片版本 Prompt，不调用文本模型二次改写；
+- V3 必须包含 V2 已有修改，V4 必须包含 V3 已有修改；
+- 新脚本保存明确的上一版本来源，画布连线连接到真正的父版本；
+- 应用动作不需要文本模型 ID、API Key，也不产生模型费用；
+- 图片自身的重新生成和历史版本保留逻辑不变。
 
-规范 §3.9 的 MVP 范围：
+验证：建立真实临时项目，依次修改不同镜头并生成 V2、V3、V4，读回每个脚本 Markdown；
+断言修改逐代累积、未修改列字节级保持一致，且应用过程中没有任何网络请求。
 
-1. 按镜头顺序拼接
-2. 应用 `trimStart` 与 `trimEnd`
-3. 统一画幅、分辨率、帧率、像素格式
-4. 混合逐镜 VO 与背景音乐 ← **取决于 D0**
-5. 可选择保留模型原生音频
-6. 导出 MP4
+### D2 · 收敛为一个上下文入口
 
-**滤镜图与命令序列不要自己设计**，`docs/decisions/0001` 附录已完整存档，
-包含画幅归一滤镜、拼接（含 concat demuxer 与 filter-complex 两条路径）、
-旁白拼接、四种音频混合分支。只需把 `ffmpeg.exec([...])` 换成 `spawn(ffmpegPath, [...])`。
+目标：右侧 Agent 面板只响应用户明确选中的节点，不自行猜测“当前脚本”。
 
-必须注意的坑（附录已写明，容易踩）：
+要求：
 
-- **concat demuxer 配 `-c copy` 在各输入编码参数不一致时会静默截断到第一个输入的时长。**
-  不同模型产出的流参数不同，**必须始终重新编码，不可用 `-c copy`**。
-  这个坑不会报错，只会让成片莫名变短。
-- concat demuxer 失败要回退 filter-complex（对异构源更稳健，但内存占用高）。
-- `electron-builder.yml` 的 `asarUnpack` 现在**只有 `better-sqlite3`**，
-  必须追加 ffmpeg / ffprobe，且运行时路径要做 `app.asar` → `app.asar.unpacked` 替换。
-- 导出失败**必须保留单镜文件与 RenderJob 日志**，不丢失任何已生成资产（规范硬要求）。
+- 删除动作层的 `latestScript` 自动回退；
+- 选中静态图时，不显示“脚本确认 开始生成”和“组合完整视频”；
+- 恰好选中一个脚本时，只显示一个“按照脚本 Vn 生成最终视频”主按钮；
+- 多选脚本时仅显示明确错误提示；
+- 静态效果图的生成仍属于脚本打磨阶段，但完成后不再把入口与最终视频入口并列常驻；
+- 切换脚本版本时清空旧的视频 Prompt、旧报价与旧任务展示，避免拿 V2 的报价提交 V3。
 
-产物落 `outputs/`（`project-service.ts:100` 已建好这个空目录）。
+验证：用组件状态测试覆盖“未选节点 / 选静态图 / 选一个脚本 / 选多个脚本”四种状态，
+逐一断言右侧出现的 CTA 数量、标题和绑定的 `scriptNodeId`。
 
-### D3 · 尾帧连续性与并发控制
+### D3 · 只根据最终脚本转译整段视频 Prompt
 
-规范 §3.8：
+目标：大模型读取用户选中的最终脚本，一次生成整条视频所需的一段 Prompt。
 
-- 使用上一镜尾帧链路时，相关镜头**必须顺序生成**
-- 只用商品 / 角色 / 风格参考时，镜头可按并发上限**并行生成**
-- 一个镜头失败不取消已完成的其他镜头
-- 用户修改上游脚本或分镜后，旧视频保留但标记 `stale`
+要求：
 
-现状全零实现。放最后是因为它依赖 D2 的导出链路成型 ——
-没有导出就没法验证「顺序生成到底有没有让画面连上」。
+- 请求契约收敛为 `{ projectRoot, scriptNodeId }`，移除 `imageNodeIds`；
+- 返回值移除 `imageNodeIds` 与 `referenceImageUrls`；
+- Utility Process 读取所选脚本的全部镜头、时长、第三列 Prompt、Audio & SFX、VO；
+- 使用纯文本结构化调用完成整片转译，不读取图片像素、不上传图片、不调用视觉模型；
+- Prompt 明确镜头时间段、动作、运镜、转场、声音与 VO，但不得增加镜头或改写 VO 原文；
+- 生成后的完整 Prompt 继续允许用户编辑；编辑后旧报价立即失效，必须重新报价；
+- 最终提交时 `referenceImageUrls`、`referenceVideoUrls`、`referenceAudioUrls` 默认均为空。
 
-`stale` 标记属规范 §2.7，与第五批的事务层耦合，本轮可只做视频侧的最小标记。
+验证：用真实脚本 Markdown 做往返测试，断言所有镜头按顺序进入整片 Prompt，且调用链中没有
+图片读取、图片上传或 `imageNodeIds`。修改 Prompt 后必须重新 `prepare`。
+
+### D4 · 一条完整视频任务与可交付文件
+
+目标：从一个最终脚本出发，产生一条完整视频任务和一份可交付 MP4。
+
+要求：
+
+- 继续复用第三批的 `prepare → approve / discard` 付费确认；
+- 一次点击确认只允许向 ORZ 提交一个任务，任务时长等于项目总时长；
+- 保留 `generateAudio: true`，脚本里的 Audio & SFX、VO 通过整段 Prompt 请求模型原生音轨；
+- 模型不支持项目精确时长时，在报价前明确阻止并提示更换模型；不得静默向上取整，也不以“稍后 trim”掩盖不匹配；
+- 任务完成后继续走现有 `downloading → validating → completed`，保存到 `assets/videos/`；
+- 将用户选定的已落盘完整视频复制到 `outputs/`，返回真实 `outputPath`；这是文件交付，不是 ffmpeg 合成；
+- 导出失败不得删除或覆盖 `assets/videos/` 中的原始完整视频；
+- 把 `video.renderProject` 改成语义明确的“导出已完成视频”接口，或替换为新的具名 IPC，禁止保留会让人误以为要拼片的含糊实现。
+
+验证：对真实临时目录和标准 MP4 测试文件完成“任务完成 → 落盘 → 导出副本”全链路；
+断言只提交一次、时长精确、输出存在、字节一致、失败时源资产仍在。
+
+---
+
+## 明确移出第四批
+
+以下内容来自旧的“逐镜生成后拼接”假设，与已确认主链路冲突，本批不做：
+
+- 每个镜头单独生成视频；
+- `trimStart` / `trimEnd` 的逐镜裁剪系统；
+- ffmpeg concat demuxer、filter-complex 拼接与统一转码；
+- 上一镜尾帧驱动下一镜、逐镜顺序生成与并发调度；
+- 逐镜 VO、独立音乐文件与视频的多轨混音；
+- 为上述拼接链路增加 RenderJob、ffmpeg 日志或数据库 migration。
+
+`docs/decisions/0001-video-backend.md` 中的 ffmpeg 命令继续作为历史技术存档，
+不再是第四批实施依据。若未来增加专业剪辑模式，应重新立项。
+
+`package.json` 与 `bun.lock` 当前存在未提交的 ffmpeg / ffprobe 依赖准备改动。
+它们来自旧计划，不代表新流程仍需要；在确认改动归属前不要覆盖或继续扩展。
+
+独立 TTS / 音乐生成和 `audio` 节点仍是另一项产品决策，不阻塞本批。
+本批只使用视频模型原生音轨，不实现独立音频模型或混音。
 
 ---
 
 ## 建议实施顺序
 
 ```
-D0 音频决策（等用户）→ D1 trim → D2 ffmpeg 导出 → D3 尾帧并发
+D1 连续脚本版本
+  → D2 单一上下文入口
+  → D3 整份脚本转完整视频 Prompt
+  → D4 单任务生成与文件交付
 ```
 
-理由：
+- 先修版本事实源，确保最终选中的脚本内容可信；
+- 再修 UI 入口，保证后续 API 永远收到用户明确选择的脚本；
+- 然后移除图片依赖并完成整片 Prompt 转译；
+- 最后复用现有报价、任务、恢复和落盘能力补齐交付。
 
-- D0 是决策，不写代码，但决定 D2 的音频分支数量。**不先定就会白写混音代码。**
-- D1 是纯数据层，无 ffmpeg 依赖，可先用纯函数测试把「裁多少、从哪裁」钉死
-- D2 是本批主体，跨 utility / 打包配置 / UI
-- D3 依赖 D2 成型才能验证效果
+每完成一项：两侧 `tsc --noEmit` 通过、`bun test tests` 全绿，再独立提交。
 
 ---
 
 ## 验收
 
-- `video.renderProject` 返回真实的 `outputPath`，文件在 `outputs/` 下且是可播放 MP4。
-- 拼接**始终重新编码**，不出现 `-c copy` 拼接多输入的路径（测试断言命令行参数）。
-- 脚本 7 秒 + Kling 生成 10 秒 → 成片该镜为 7 秒，`trimEnd` 为 3。
-- 成片总时长等于脚本总时长（容差 0.1 秒内），不因取整档位而变长。
-- 导出失败后单镜 MP4 仍在磁盘，RenderJob 日志可查。
-- `electron-builder.yml` 的 `asarUnpack` 含 ffmpeg 与 ffprobe。
-- 使用尾帧链路的镜头严格顺序生成；无依赖时受控并行（测试用假 ORZ 记录调用时序）。
-- 两侧 `tsc --noEmit` 无错误，`bun test tests` 全绿（当前基线 184 项）。
+- 静态图 Prompt 可编辑、可手动重新生成，历史图片版本不丢失；
+- 连续应用两次后得到 `V1 → V2 → V3`，V3 同时包含前两次修改；
+- 应用静态图到新脚本不调用文本模型，不产生模型费用；
+- 选中静态图时右侧不出现脚本或视频生成 CTA；
+- 只有恰好选中一个脚本时，右侧才出现一个最终视频 CTA；
+- 最终视频 Prompt 请求只需要 `scriptNodeId`，不含 `imageNodeIds`；
+- 最终生视频不读取、不上传、不强制选择静态图；
+- 一份脚本只提交一个完整时长的视频任务，不产生单镜视频任务；
+- 不支持精确项目时长的模型在报价前被阻止，不静默取整；
+- 报价与确认支付仍是两个动作，`discard` 不产生网络请求和费用；
+- 完成视频自动下载并校验，导出到 `outputs/` 的 MP4 与源文件字节一致；
+- 导出失败时 `assets/videos/` 中的源文件仍然存在；
+- 两侧 `tsc --noEmit` 无错误，`bun test tests` 全绿。
 
 ---
 
 ## 环境
 
-- Electron 真实代码仅在 `src/main` / `preload` / `renderer` / `shared` / `utility`。
-- 远程仓库 `https://github.com/fayezang/ai-tvc-agent.git`，
-  凭据（PAT）已存 macOS 钥匙串，推送免密。
-- **已知环境问题**：本机 macOS 代码签名策略会拦截 rollup / esbuild / lightningcss
-  的原生模块，`bun run dev` 与 `build` 起不来，但 `bun test` 与 `typecheck` 不受影响。
-  详见 README「已知环境问题」。**这是机器问题不是代码问题，不要试图改代码绕过。**
-  这意味着 **D2 的导出无法在本机跑 `dev` 手工验证**，必须靠测试覆盖。
-- `AgentUiEventSchema` 每新增成员，`src/preload/index.ts` 的 `AGENT_EVENT_TYPES`
-  白名单必须同步，否则事件被静默丢弃。
+- Electron 真实代码仅在 `src/main` / `preload` / `renderer` / `shared` / `utility`；
+- 远程仓库为 `https://github.com/fayezang/ai-tvc-agent.git`；
+- 本机 macOS 原生模块策略可能阻止 `dev` 与 `build`，但不影响 `bun test` 与 `typecheck`；
+- `AgentUiEventSchema` 每新增成员，必须同步 `src/preload/index.ts` 的事件白名单；
+- 产品代码继续遵守零 mock：拿不到真实值就返回 `null` 或抛出明确错误，不能伪造成功。

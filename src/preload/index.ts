@@ -84,7 +84,7 @@ const api: DesktopApi = {
     selectVariant: (jobId, outputUrl) =>
       ipcRenderer.invoke(IpcChannels.videoSelectVariant, { jobId, outputUrl }),
     chain: (jobId) => ipcRenderer.invoke(IpcChannels.videoChain, jobId),
-    renderProject: (projectRoot) => ipcRenderer.invoke(IpcChannels.videoRenderProject, projectRoot)
+    exportCompleted: (jobId) => ipcRenderer.invoke(IpcChannels.videoExportCompleted, jobId)
   }
 };
 

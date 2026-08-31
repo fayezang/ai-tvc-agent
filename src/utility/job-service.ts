@@ -9,6 +9,7 @@ import type {
   VideoTaskState
 } from "../shared/contracts.js";
 import { estimateVideoCost, normalizeVideoParams } from "../shared/video-estimate.js";
+import { assertExactVideoDuration } from "../shared/orz-models.js";
 import {
   isPreSubmitVideoTaskState,
   isTerminalVideoTaskState
@@ -16,7 +17,7 @@ import {
 import { triageDanglingJobs, type TriageResult } from "./job-recovery.js";
 import { OrzClient, type OrzTaskResponse } from "./providers/orz-client.js";
 import { resolveOrzAdapter } from "./providers/orz-adapters.js";
-import { persistVideoOutputs } from "./video-assets.js";
+import { exportCompletedVideoFile, persistVideoOutputs } from "./video-assets.js";
 
 interface JobRow {
   id: string;
@@ -154,6 +155,7 @@ export class JobService {
     apiKey: string,
     lineage?: { parentJobId: string; rootJobId: string; attempt: number }
   ): Promise<VideoJob> {
+    assertExactVideoDuration(incoming.modelId, incoming.duration);
     // 规范化放在这里，因为 submit 是所有提交路径的唯一入口（retry 也复用它）。
     // 放在调用方会漏：未规范化的请求会被 adapter 的 assertModel 拒掉，
     // 而估价却已按规范化后的参数报了价 —— 用户看到的价必须是真能提交的那一档。
@@ -207,6 +209,7 @@ export class JobService {
     incoming: VideoGenerationRequest,
     lineage?: { parentJobId: string; rootJobId: string; attempt: number }
   ): VideoPreparation {
+    assertExactVideoDuration(incoming.modelId, incoming.duration);
     const normalized = normalizeVideoParams(incoming);
     const request: VideoGenerationRequest = {
       ...incoming,
@@ -483,6 +486,26 @@ export class JobService {
 
   get(projectRoot: string, jobId: string): VideoJob {
     return rowToJob(this.getRow(projectRoot, jobId));
+  }
+
+  async exportCompleted(
+    projectRoot: string,
+    jobId: string,
+    destinationPath?: string
+  ): Promise<{ outputPath: string }> {
+    const job = this.get(projectRoot, jobId);
+    if (job.state !== "completed") throw new Error("只有已经下载并校验完成的视频才能导出");
+    const sourceRelativePath = job.selectedLocalPath ??
+      (job.localPaths.length === 1 ? job.localPaths[0] : undefined);
+    if (!sourceRelativePath) {
+      throw new Error("请先在已落盘的视频版本中选择一个要导出的版本");
+    }
+    return exportCompletedVideoFile({
+      projectRoot,
+      jobId,
+      sourceRelativePath,
+      ...(destinationPath ? { destinationPath } : {})
+    });
   }
 
   private async updateFromProvider(

@@ -18,6 +18,35 @@ export interface ScriptShotDraft {
   vo: string;
 }
 
+export interface FullVideoTimelineShot {
+  shotId: string;
+  start: number;
+  end: number;
+  duration: number;
+  visualPrompt: string;
+  audioSfxPrompt: string;
+  vo: string;
+}
+
+export const buildFullVideoTimeline = (
+  shots: readonly ScriptShotDraft[]
+): FullVideoTimelineShot[] => {
+  let cursor = 0;
+  return shots.map((shot) => {
+    const start = cursor;
+    cursor += shot.duration;
+    return {
+      shotId: shot.shotId,
+      start,
+      end: cursor,
+      duration: shot.duration,
+      visualPrompt: shot.prompt,
+      audioSfxPrompt: shot.audioSfxPrompt,
+      vo: shot.vo
+    };
+  });
+};
+
 export interface StoryboardShotDraft {
   shot: string;
   duration: number;
@@ -48,6 +77,48 @@ const splitMarkdownTableRow = (line: string): string[] => {
   }
   cells.push(current.trim());
   return cells;
+};
+
+export const replaceScriptPromptInMarkdown = (input: {
+  markdown: string;
+  shotId: string;
+  prompt: string;
+  nextVersion: number;
+  parentVersion: number;
+}): string => {
+  const newline = input.markdown.includes("\r\n") ? "\r\n" : "\n";
+  const lines = input.markdown.split(/\r?\n/);
+  let replaced = false;
+  const next = lines.map((line, index) => {
+    if (index === 0 && /^#\s+脚本\s+V\d+\s*$/i.test(line)) return `# 脚本 V${input.nextVersion}`;
+    if (/^\*\*创意来源：\*\*/.test(line)) {
+      return `**创意来源：** 由脚本 V${input.parentVersion} 的 ${input.shotId} 静态图应用生成`;
+    }
+    if (!line.trimStart().startsWith("|") || splitMarkdownTableRow(line)[0] !== input.shotId) return line;
+
+    const separators: number[] = [];
+    let escaped = false;
+    for (let characterIndex = 0; characterIndex < line.length; characterIndex += 1) {
+      const character = line[characterIndex]!;
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === "|") {
+        separators.push(characterIndex);
+      }
+    }
+    if (separators.length < 6) throw new Error(`脚本镜头 ${input.shotId} 的表格行格式无效`);
+    const start = separators[2]! + 1;
+    const end = separators[3]!;
+    const oldCell = line.slice(start, end);
+    const leading = oldCell.match(/^\s*/)?.[0] ?? "";
+    const trailing = oldCell.match(/\s*$/)?.[0] ?? "";
+    replaced = true;
+    return `${line.slice(0, start)}${leading}${escapeTableCell(input.prompt)}${trailing}${line.slice(end)}`;
+  });
+  if (!replaced) throw new Error(`基础脚本中没有镜头 ${input.shotId}`);
+  return next.join(newline);
 };
 
 const containsCjk = (value: string): boolean => /[\u3400-\u9fff]/u.test(value);
@@ -283,32 +354,39 @@ export class WorkflowService {
 
   async createNextScriptVersion(
     projectRoot: string,
-    input: { baseScriptNodeId: string; shotId: string; videoPrompt: string }
+    input: { baseScriptNodeId: string; shotId: string; prompt: string }
   ): Promise<CanvasNode> {
     const state = await this.projects.open(projectRoot);
     const base = state.canvas.nodes.find((node) => node.id === input.baseScriptNodeId && node.kind === "script");
     if (!base) throw new Error("找不到作为新版本基础的脚本节点");
+    const baseMarkdown = await this.projects.readBody(projectRoot, base.bodyPath);
     const baseShots = validateScriptShots(
-      parseScriptMarkdown(await this.projects.readBody(projectRoot, base.bodyPath)),
+      parseScriptMarkdown(baseMarkdown),
       state.project.adDuration
     );
     if (!baseShots.some((shot) => shot.shotId === input.shotId)) {
       throw new Error(`基础脚本中没有镜头 ${input.shotId}`);
     }
-    const shots = baseShots.map((shot) =>
-      shot.shotId === input.shotId ? { ...shot, prompt: input.videoPrompt.trim() } : { ...shot }
-    );
     const nextVersion = Math.max(
       0,
       ...state.canvas.nodes
         .filter((node) => node.kind === "script")
         .map((node) => node.scriptVersion ?? Number(node.title.match(/V(\d+)/i)?.[1] ?? 1))
     ) + 1;
+    const markdown = replaceScriptPromptInMarkdown({
+      markdown: baseMarkdown,
+      shotId: input.shotId,
+      prompt: input.prompt,
+      nextVersion,
+      parentVersion: base.scriptVersion ?? 1
+    });
+    const shots = validateScriptShots(parseScriptMarkdown(markdown), state.project.adDuration);
     return this.createScriptVersionNode(projectRoot, {
       version: nextVersion,
       source: base,
       selectedDirection: `由脚本 V${base.scriptVersion ?? 1} 的 ${input.shotId} 静态图应用生成`,
-      shots
+      shots,
+      markdown
     });
   }
 
@@ -548,6 +626,7 @@ export class WorkflowService {
       source?: CanvasNode | undefined;
       selectedDirection: string;
       shots: readonly ScriptShotDraft[];
+      markdown?: string | undefined;
     }
   ): Promise<CanvasNode> {
     const before = await this.projects.open(projectRoot);
@@ -565,7 +644,7 @@ export class WorkflowService {
     await this.projects.writeBody(
       projectRoot,
       created.bodyPath,
-      renderScriptMarkdown(input.version, input.selectedDirection, input.shots)
+      input.markdown ?? renderScriptMarkdown(input.version, input.selectedDirection, input.shots)
     );
     const after = await this.projects.open(projectRoot);
     const node: CanvasNode = {

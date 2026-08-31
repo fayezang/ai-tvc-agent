@@ -175,8 +175,8 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
       return jobService.selectVariant(payload.projectRoot, payload.jobId, payload.outputUrl);
     case "video.chain":
       return jobService.chain(payload.projectRoot, payload.jobId);
-    case "video.renderProject":
-      throw new Error("基础 MP4 合成将在视频生成闭环阶段启用；当前未执行任何伪导出。 ");
+    case "video.exportCompleted":
+      return jobService.exportCompleted(payload.projectRoot, payload.jobId, payload.destinationPath);
     case "agent.prompt": {
       const textModelId = request.secrets?.textModelId;
       if (!textModelId) throw new Error("请先设置 ORZ 文本模型 ID");
@@ -258,24 +258,18 @@ const handle = async (request: UtilityRequest): Promise<unknown> => {
         nodeId: payload.nodeId,
         versionId: payload.versionId
       });
-    case "agent.applyStoryboardImage": {
-      const textModelId = request.secrets?.textModelId;
-      if (!textModelId) throw new Error("请先设置 ORZ 文本模型 ID");
+    case "agent.applyStoryboardImage":
+      // 只复制最新脚本并替换第三列 Prompt；纯本地操作，不需要模型或 API Key。
       return agentService.applyStoryboardImage({
         projectRoot: payload.projectRoot,
-        nodeId: payload.nodeId,
-        ...(payload.baseScriptNodeId ? { baseScriptNodeId: payload.baseScriptNodeId } : {}),
-        apiKey: requireApiKey(request),
-        textModelId
+        nodeId: payload.nodeId
       });
-    }
     case "agent.generateVideoPrompt": {
       const textModelId = request.secrets?.textModelId;
       if (!textModelId) throw new Error("请先设置 ORZ 文本模型 ID");
       return agentService.generateVideoPrompt({
         projectRoot: payload.projectRoot,
         scriptNodeId: payload.scriptNodeId,
-        imageNodeIds: payload.imageNodeIds,
         apiKey: requireApiKey(request),
         textModelId
       });

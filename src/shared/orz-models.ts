@@ -91,6 +91,27 @@ export const resolveVideoModelForRole = (
   return routing[role];
 };
 
+/**
+ * 最终整片必须一次生成项目的精确时长。离散档位不匹配时不能向上取整后再
+ * 假装稍后裁剪；在报价和建待确认任务之前就明确拒绝。
+ */
+export const assertExactVideoDuration = (modelId: string, duration: number): void => {
+  const definition = MODEL_DEFINITIONS.find((model) => model.id === modelId && model.media === "video");
+  if (!definition) return;
+  const supported = definition.durations === "4-15"
+    ? duration >= 4 && duration <= 15
+    : definition.durations.includes(duration);
+  if (!supported) {
+    const range = definition.durations === "4-15"
+      ? "4–15 秒内的任意整秒"
+      : `${definition.durations.join(" / ")} 秒`;
+    throw new Error(
+      `${definition.name} 不支持项目要求的精确 ${duration} 秒整片时长（支持 ${range}）。` +
+        "请在报价前更换支持该时长的模型。"
+    );
+  }
+};
+
 export const MODEL_DEFINITIONS: readonly ModelDefinition[] = [
   {
     id: ORZ_MODELS.kling,

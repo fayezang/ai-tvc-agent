@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import type { VideoGenerationRequest } from "../src/shared/contracts.js";
 import { JobService, type JobDatabase } from "../src/utility/job-service.js";
 import { runMigrations, type MigrationRunnerDatabase } from "../src/utility/migrations.js";
@@ -88,6 +89,24 @@ describe("submit confirmation", () => {
     });
   });
 
+  test("blocks a model without the exact project duration before quoting or contacting ORZ", async () => {
+    await withProject(async ({ projectRoot, createService }) => {
+      const orz = serveOrz();
+      try {
+        const service = createService(orz.baseUrl);
+        expect(() => service.prepare({
+          ...request(projectRoot),
+          modelId: "kuaishou/kling-2-5-turbo",
+          duration: 8,
+          referenceImageUrls: []
+        })).toThrow("不支持项目要求的精确 8 秒");
+        expect(orz.requests()).toBe(0);
+      } finally {
+        orz.stop();
+      }
+    });
+  });
+
   test("approve is the only action that contacts ORZ", async () => {
     await withProject(async ({ projectRoot, createService }) => {
       const orz = serveOrz();
@@ -101,6 +120,11 @@ describe("submit confirmation", () => {
         expect(orz.requests()).toBe(2);
         expect(job.state).toBe("completed");
         expect(job.providerTaskId).toBe("task-1");
+        expect(job.localPaths).toHaveLength(1);
+        const exported = await service.exportCompleted(projectRoot, job.id);
+        expect([...readFileSync(exported.outputPath)]).toEqual([
+          ...readFileSync(join(projectRoot, job.localPaths[0]!))
+        ]);
       } finally {
         orz.stop();
       }

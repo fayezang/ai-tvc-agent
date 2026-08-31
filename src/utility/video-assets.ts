@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join, relative, resolve, sep } from "node:path";
 import { writeAtomic } from "./project-service.js";
 
 /**
@@ -132,4 +133,31 @@ export const persistVideoOutputs = async (input: {
     }
   }
   return { localPaths, failures };
+};
+
+/**
+ * 把已完成的一整条视频复制到 outputs/。这只是文件交付，不做拼接、裁剪或转码。
+ * 先完整读取并校验源文件，再原子写副本；任何失败都不会修改 assets/videos/。
+ */
+export const exportCompletedVideoFile = async (input: {
+  projectRoot: string;
+  jobId: string;
+  sourceRelativePath: string;
+  destinationPath?: string;
+}): Promise<{ outputPath: string }> => {
+  const root = resolve(input.projectRoot);
+  const source = resolve(root, input.sourceRelativePath);
+  const sourceWithinProject = relative(root, source);
+  if (!sourceWithinProject.startsWith(`assets${sep}videos${sep}`)) {
+    throw new Error("只能导出项目 assets/videos/ 中已经落盘的完整视频");
+  }
+  const bytes = new Uint8Array(await readFile(source));
+  const problem = describeVideoBytes(bytes);
+  if (problem) throw new Error(`源视频校验失败：${problem}`);
+  const safeJobId = input.jobId.replace(/[^a-zA-Z0-9_-]/g, "-") || "video";
+  const outputPath = input.destinationPath
+    ? resolve(input.destinationPath)
+    : join(root, "outputs", `final-${safeJobId}.mp4`);
+  await writeAtomic(outputPath, bytes);
+  return { outputPath };
 };

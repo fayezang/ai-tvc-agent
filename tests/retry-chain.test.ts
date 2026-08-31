@@ -334,14 +334,14 @@ describe("chain cost accounting", () => {
     });
   });
 
-  test("bills the seconds the model actually generated, not the script duration", async () => {
+  test("refuses a discrete model that cannot generate the exact project duration", async () => {
     await withProject(async ({ projectRoot, service }) => {
       const orz = serveOrz(() => "completed");
       try {
         const jobs = service(orz.baseUrl);
-        // Kling 只有 5 / 10 两档。脚本要 7 秒 → 生成 10 秒再裁，ORZ 按 10 秒计费。
-        // 按 request.duration 汇总会少算 3 秒、少算 ¥6.27。
-        await jobs.submit(
+        // 最终整片不再走“向上取整后裁剪”。Kling 只有 5 / 10 两档，
+        // 项目要 7 秒时必须在提交前阻止并让用户更换模型。
+        await expect(jobs.submit(
           {
             ...request(projectRoot),
             modelId: "kuaishou/kling-2-5-turbo",
@@ -349,14 +349,11 @@ describe("chain cost accounting", () => {
             resolution: "720p"
           },
           "key"
-        );
+        )).rejects.toThrow("不支持项目要求的精确 7 秒");
         const rows = new Database(join(projectRoot, ".agent", "index.sqlite"));
-        const only = rows.prepare("SELECT id FROM video_jobs").get() as { id: string };
+        const count = rows.prepare("SELECT COUNT(*) AS count FROM video_jobs").get() as { count: number };
         rows.close();
-
-        const chain = jobs.chain(projectRoot, only.id);
-        expect(chain.totalBilledSeconds).toBe(10);
-        expect(chain.totalCost).toBe(20.9);
+        expect(count.count).toBe(0);
       } finally {
         orz.stop();
       }

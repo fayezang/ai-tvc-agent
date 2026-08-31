@@ -27,6 +27,7 @@ import {
   type CreativeDirectionDraft,
   type ScriptShotDraft,
   type StoryboardShotDraft,
+  buildFullVideoTimeline,
   parseScriptMarkdown,
   validateScriptShots,
   parseStoryboardMarkdown,
@@ -124,69 +125,6 @@ const structuredText = async (input: {
   } catch (error) {
     throw new Error(providerErrorMessage(error, input.textModelId));
   }
-};
-
-const structuredVisionText = async (input: {
-  apiKey: string;
-  textModelId: string;
-  systemPrompt: string;
-  prompt: string;
-  imageUrls: readonly string[];
-  maxTokens: number;
-}): Promise<string> => {
-  type VisionResponse = {
-    choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
-    error?: { message?: string };
-    message?: string;
-  };
-  const response = await fetch(`${ORZ_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: input.textModelId,
-      stream: false,
-      max_tokens: input.maxTokens,
-      messages: [
-        { role: "system", content: input.systemPrompt },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: input.prompt },
-            ...input.imageUrls.map((url, index) => ({
-              type: "image_url",
-              image_url: { url },
-              metadata: { shotOrder: index + 1 }
-            }))
-          ]
-        }
-      ]
-    })
-  });
-  const raw = await response.text();
-  let parsed: VisionResponse | null = null;
-  try {
-    parsed = JSON.parse(raw) as VisionResponse;
-  } catch {
-    parsed = null;
-  }
-  if (!response.ok) {
-    const detail = parsed?.error?.message ?? parsed?.message ?? raw.trim().slice(0, 320);
-    throw new Error(`ORZ 多模态请求失败（HTTP ${response.status}）：${detail || "空响应"}`);
-  }
-  if (!parsed) {
-    throw new Error(`ORZ 多模态请求返回了非 JSON 内容：${raw.trim().slice(0, 240)}`);
-  }
-  const content = parsed.choices?.[0]?.message?.content;
-  const text = typeof content === "string"
-    ? content
-    : Array.isArray(content)
-      ? content.map((part) => part.text ?? "").join("")
-      : "";
-  if (!text.trim()) throw new Error("多模态模型没有返回完整视频 Prompt");
-  return text.trim();
 };
 
 const jsonObject = (raw: string): Record<string, unknown> => {
@@ -848,40 +786,30 @@ export class AgentService {
   async applyStoryboardImage(input: {
     projectRoot: string;
     nodeId: string;
-    baseScriptNodeId?: string | undefined;
-    apiKey: string;
-    textModelId: string;
   }): Promise<AgentReply> {
     const manifest = await readStoryboardNodeManifest(input.projectRoot, input.nodeId);
     const selected = manifest.versions.find((version) => version.id === manifest.selectedVersionId && version.status === "ready");
     if (!selected) throw new Error("请先选择一个生成成功的图片版本");
     const project = await this.projects.open(input.projectRoot);
-    const baseScriptNodeId = input.baseScriptNodeId ?? manifest.sourceScriptNodeId;
-    const base = project.canvas.nodes.find((node) => node.id === baseScriptNodeId && node.kind === "script");
-    if (!base) throw new Error("请先选择一个脚本节点作为新版本基础");
+    const base = [...project.canvas.nodes]
+      .filter((node) => node.kind === "script")
+      .sort((left, right) => (right.scriptVersion ?? 1) - (left.scriptVersion ?? 1))[0];
+    if (!base) throw new Error("项目中没有可作为新版本基础的脚本");
     const shots = validateScriptShots(
       parseScriptMarkdown(await this.projects.readBody(input.projectRoot, base.bodyPath)),
       project.project.adDuration
     );
-    const shot = shots.find((candidate) => candidate.shotId === manifest.shotId);
-    if (!shot) throw new Error(`所选脚本中没有镜头 ${manifest.shotId}`);
-    const raw = await structuredText({
-      apiKey: input.apiKey,
-      textModelId: input.textModelId,
-      maxTokens: 2048,
-      systemPrompt: `Convert this still-image prompt into a production-ready image-to-video prompt. 只输出 JSON 对象，且只有 videoPrompt 一个字符串字段，值必须是英文。保留主体、产品、服装、场景、构图和风格，增加明确的主体动作、镜头运动、节奏、时间变化和连续性。不要修改 Audio & SFX 或 VO，不要生成新的镜头，不要添加解释。`,
-      prompt: `镜头：${shot.shotId}\n时长：${shot.duration} 秒\n静态图片 Prompt：${selected.prompt}\nAudio & SFX：${shot.audioSfxPrompt}\nVO（必须尽量逐字保留）：${shot.vo || "无"}`
-    });
-    const videoPrompt = stringValue(jsonObject(raw), "videoPrompt");
-    if (!videoPrompt) throw new Error("文本模型没有返回视频 Prompt");
+    if (!shots.some((candidate) => candidate.shotId === manifest.shotId)) {
+      throw new Error(`最新脚本中没有镜头 ${manifest.shotId}`);
+    }
     const created = await this.workflow.createNextScriptVersion(input.projectRoot, {
       baseScriptNodeId: base.id,
       shotId: manifest.shotId,
-      videoPrompt
+      prompt: selected.prompt
     });
     return {
       id: randomUUID(),
-      text: `已把 ${manifest.shotId} 应用到${created.title}。新节点是上一版本的完整副本，只替换该镜头的视频 Prompt；时长、Audio & SFX 和 VO 均已保留。`,
+      text: `已把 ${manifest.shotId} 应用到${created.title}。新节点以${base.title}为父版本，只替换该镜头的图片 Prompt；时长、Audio & SFX 和 VO 均已原样保留。`,
       createdAt: new Date().toISOString()
     };
   }
@@ -889,7 +817,6 @@ export class AgentService {
   async generateVideoPrompt(input: {
     projectRoot: string;
     scriptNodeId: string;
-    imageNodeIds: readonly string[];
     apiKey: string;
     textModelId: string;
   }): Promise<GenerateVideoPromptResult> {
@@ -900,70 +827,17 @@ export class AgentService {
       parseScriptMarkdown(await this.projects.readBody(input.projectRoot, script.bodyPath)),
       project.project.adDuration
     );
-    if (input.imageNodeIds.length !== shots.length) {
-      throw new Error(
-        `必须选择 ${shots.length} 张图片：当前脚本有 ${shots.length} 个镜头，但选择了 ${input.imageNodeIds.length} 张`
-      );
-    }
-    const manifests = await Promise.all(
-      input.imageNodeIds.map((nodeId) => readStoryboardNodeManifest(input.projectRoot, nodeId))
-    );
-    const manifestByShot = new Map(manifests.map((manifest) => [manifest.shotId, manifest]));
-    if (manifestByShot.size !== shots.length || shots.some((shot) => !manifestByShot.has(shot.shotId))) {
-      throw new Error("每个镜头必须且只能选择一张静态图，不能缺少镜头或重复选择同一镜头");
-    }
-    const ordered = shots.map((shot) => {
-      const manifest = manifestByShot.get(shot.shotId)!;
-      const version = manifest.versions.find(
-        (candidate) => candidate.id === manifest.selectedVersionId && candidate.status === "ready" && candidate.relativePath
-      );
-      if (!version?.relativePath) throw new Error(`${shot.shotId} 没有选中可用的图片版本`);
-      return { shot, manifest, version };
-    });
-    // 多模态理解读得懂 data URL；但随后提交给视频模型的 reference_image_urls
-    // 必须是 ORZ 可访问的真实链接，两者来源不同，不能混用。
-    const visionImageUrls = await Promise.all(
-      ordered.map(({ version }) => dataUrlFromRelativePath(input.projectRoot, version.relativePath!))
-    );
-    const client = new OrzClient(input.apiKey);
-    const referenceImageUrls: string[] = [];
-    for (const { shot, version } of ordered) {
-      const uploaded = version.sourceUrl && /^https?:\/\//i.test(version.sourceUrl)
-        ? version.sourceUrl
-        : await uploadLocalImage(input.projectRoot, version.relativePath!, client);
-      if (!uploaded) {
-        throw new Error(`${shot.shotId} 的静态图无法上传到 ORZ，暂时不能提交视频生成，请重试或重新生成该镜头图片`);
-      }
-      referenceImageUrls.push(uploaded);
-    }
-    let cursor = 0;
-    const timeline = ordered.map(({ shot, version }) => {
-      const start = cursor;
-      cursor += shot.duration;
-      return {
-        shotId: shot.shotId,
-        start,
-        end: cursor,
-        duration: shot.duration,
-        selectedImagePrompt: version.prompt,
-        scriptPrompt: shot.prompt,
-        audioSfxPrompt: shot.audioSfxPrompt,
-        vo: shot.vo
-      };
-    });
-    const prompt = await structuredVisionText({
+    const timeline = buildFullVideoTimeline(shots);
+    const prompt = await structuredText({
       apiKey: input.apiKey,
       textModelId: input.textModelId,
       maxTokens: 4096,
-      imageUrls: visionImageUrls,
-      systemPrompt: `你是 TVC 视频导演。根据按镜头顺序提供的全部参考图和时间轴，生成一整段可直接交给视频模型的英文 Prompt。只输出最终 Prompt，不要 Markdown 代码围栏或解释。必须覆盖全部镜头，不得添加额外镜头，不得改变产品外观或品牌文字。明确每个时间段、镜头运动、主体动作、服装与包装连续性、灯光与色彩连续性、转场、Audio & SFX 和 VO 的时间位置。要求视频模型生成原生声音；VO 原文必须用引号保留，并写明 Speak every VO line as literally and verbatim as possible, without rewriting.`,
-      prompt: `项目画幅：${project.project.aspectRatio ?? "16:9"}\n项目总时长：${project.project.adDuration} 秒\n以下 JSON 的顺序与随后图片顺序完全一致：\n${JSON.stringify(timeline, null, 2)}`
+      systemPrompt: `你是 TVC 视频导演。根据用户选中的完整五列表格脚本和时间轴，生成一整段可直接交给视频模型的英文 Prompt。只输出最终 Prompt，不要 Markdown 代码围栏或解释。必须按输入顺序覆盖全部镜头，不得添加、删除或合并镜头，不得改变产品外观或品牌文字。明确每个时间段、主体动作、镜头运动、转场、Audio & SFX 和 VO 的时间位置，并保持服装、包装、灯光和色彩连续性。要求视频模型生成原生声音；每条非空 VO 必须用引号逐字保留，并写明 Speak every VO line literally and verbatim, without rewriting.`,
+      prompt: `项目画幅：${project.project.aspectRatio ?? "16:9"}\n项目总时长：${project.project.adDuration} 秒\n镜头总数：${shots.length}\n严格按以下 JSON 数组顺序生成整片 Prompt：\n${JSON.stringify(timeline, null, 2)}`
     });
     return {
       prompt,
       scriptNodeId: script.id,
-      imageNodeIds: ordered.map(({ manifest }) => manifest.nodeId),
-      referenceImageUrls,
       duration: project.project.adDuration,
       shotCount: shots.length,
       aspectRatio: project.project.aspectRatio ?? "16:9"

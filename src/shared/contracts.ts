@@ -260,12 +260,11 @@ export const VideoEstimateSchema = Schema.Struct({
   amount: Schema.NullOr(Schema.Number),
   amountPerSecond: Schema.NullOr(Schema.Number),
   /**
-   * 实际计费秒数。与 requestedSeconds 可能不同：模型只有离散时长档时，
-   * 系统生成更长素材再裁剪，而 ORZ 按生成时长计费。
-   * Kling 只有 5 / 10 两档，脚本要 7 秒时这里是 10。
+   * 实际计费秒数。最终整片链路要求它严格等于 requestedSeconds；
+   * 不支持精确项目时长的模型会在报价前被拒绝。
    */
   billedSeconds: Schema.Number,
-  /** 脚本要求的镜头时长。billedSeconds 大于它时说明发生了向上取整。 */
+  /** 项目要求的整片时长。 */
   requestedSeconds: Schema.Number,
   /** 是否走了参考图折扣价。 */
   discounted: Schema.Boolean,
@@ -408,21 +407,17 @@ export const SelectStoryboardImageVersionRequestSchema = Schema.Struct({
 
 export const ApplyStoryboardImageRequestSchema = Schema.Struct({
   projectRoot: Schema.String.pipe(Schema.minLength(1)),
-  nodeId: Schema.String.pipe(Schema.minLength(1)),
-  baseScriptNodeId: Schema.optional(Schema.String.pipe(Schema.minLength(1)))
+  nodeId: Schema.String.pipe(Schema.minLength(1))
 });
 
 export const GenerateVideoPromptRequestSchema = Schema.Struct({
   projectRoot: Schema.String.pipe(Schema.minLength(1)),
-  scriptNodeId: Schema.String.pipe(Schema.minLength(1)),
-  imageNodeIds: Schema.Array(Schema.String.pipe(Schema.minLength(1))).pipe(Schema.minItems(1))
+  scriptNodeId: Schema.String.pipe(Schema.minLength(1))
 });
 
 export const GenerateVideoPromptResultSchema = Schema.Struct({
   prompt: Schema.String,
   scriptNodeId: Schema.String,
-  imageNodeIds: Schema.Array(Schema.String),
-  referenceImageUrls: Schema.Array(Schema.String),
   duration: Schema.Number,
   shotCount: Schema.Number.pipe(Schema.int(), Schema.greaterThan(0)),
   aspectRatio: AspectRatioSchema
@@ -524,7 +519,7 @@ export interface DesktopApi {
     chain(jobId: string): Promise<VideoJobChain>;
     getJob(jobId: string): Promise<VideoJob>;
     selectVariant(jobId: string, outputUrl: string): Promise<VideoJob>;
-    renderProject(projectRoot: string): Promise<{ outputPath: string }>;
+    exportCompleted(jobId: string): Promise<{ outputPath: string } | null>;
   };
 }
 

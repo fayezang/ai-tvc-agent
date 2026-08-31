@@ -37,5 +37,5 @@ export const IpcChannels = {
   videoGetJob: "video:get-job",
   videoSelectVariant: "video:select-variant",
   videoChain: "video:chain",
-  videoRenderProject: "video:render-project"
+  videoExportCompleted: "video:export-completed"
 } as const;

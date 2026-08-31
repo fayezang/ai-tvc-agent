@@ -7,17 +7,14 @@
  *    分辨率与画幅，并把每一处调整记成一条面向用户的说明。
  * 2. **金额计算** —— 用 orz-pricing 的单价乘以**实际计费秒数**。
  *
- * 第二点是本模块存在的理由。脚本镜头时长与模型可生成时长不是同一概念：
- * Kling 只有 5 / 10 两个时长档，脚本要 7 秒时系统会生成 10 秒再裁剪，
- * 而 ORZ **按 10 秒计费**。若按脚本时长报价，用户会以为在付 7 秒的钱。
- * 所以 billedSeconds 与 requestedSeconds 必须分开返回，
- * 且 adjustments 要把这件事说清楚。
+ * 最终整片必须精确匹配项目时长。Kling 只有 5 / 10 两个时长档，项目要 7 秒时
+ * 本模块会在报价前拒绝，绝不报 10 秒的价后再以裁剪掩盖不匹配。
  *
  * 本模块是纯函数，不发任何网络请求，因此可以在提交前反复调用。
  */
 
 import type { AspectRatio, VideoEstimate, VideoGenerationRequest } from "./contracts.js";
-import { MODEL_DEFINITIONS } from "./orz-models.js";
+import { assertExactVideoDuration, MODEL_DEFINITIONS } from "./orz-models.js";
 import {
   PRICING_DISCLAIMER,
   PRICING_FETCHED_AT,
@@ -59,34 +56,16 @@ export const normalizeVideoParams = (
     };
   }
 
-  let duration = request.duration;
+  const duration = request.duration;
   if (definition.durations === "4-15") {
-    // 连续区间：只做边界收敛。
-    if (duration < 4) {
-      duration = 4;
-      adjustments.push(`${definition.name} 最短 4 秒，已上调至 4 秒`);
-    } else if (duration > 15) {
-      duration = 15;
-      adjustments.push(`${definition.name} 最长 15 秒，已下调至 15 秒`);
+    if (duration < 4 || duration > 15) {
+      adjustments.push(`${definition.name} 不支持精确 ${duration} 秒；必须更换模型，不会调整时长`);
     }
   } else if (!definition.durations.includes(duration)) {
-    // 离散档位：取「不短于脚本时长」的最小档，保证素材够裁；
-    // 没有更长的档时退回最长档。裁剪由 trimStart / trimEnd 完成，
-    // 脚本总时长不因此改变。
-    const longerTiers = definition.durations.filter((tier) => tier >= duration);
-    const picked = longerTiers.length > 0 ? Math.min(...longerTiers) : Math.max(...definition.durations);
-    if (picked > duration) {
-      adjustments.push(
-        `${definition.name} 时长固定为 ${definition.durations.join(" / ")} 秒，` +
-          `将生成 ${picked} 秒后裁剪至脚本要求的 ${duration} 秒；计费按 ${picked} 秒计`
-      );
-    } else {
-      adjustments.push(
-        `${definition.name} 最长 ${picked} 秒，短于脚本要求的 ${duration} 秒；` +
-          `请拆分该镜头，否则画面时长不足`
-      );
-    }
-    duration = picked;
+    adjustments.push(
+      `${definition.name} 只支持 ${definition.durations.join(" / ")} 秒，不支持精确 ${duration} 秒；` +
+        "必须更换模型，不会向上取整或稍后裁剪"
+    );
   }
 
   let resolution = request.resolution;
@@ -124,6 +103,7 @@ export const estimateVideoCost = (
     "modelId" | "duration" | "resolution" | "aspectRatio" | "referenceImageUrls"
   >
 ): VideoEstimate => {
+  assertExactVideoDuration(request.modelId, request.duration);
   const normalized = normalizeVideoParams(request);
   const hasReferenceInput = request.referenceImageUrls.length > 0;
   const price = lookupVideoPrice(request.modelId, normalized.resolution, hasReferenceInput);

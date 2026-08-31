@@ -3,7 +3,6 @@ import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflo
 import { Check, CircleAlert, FilePlus2, ImageIcon, LoaderCircle, RefreshCw } from "lucide-react";
 import type { CanvasNode, StoryboardImageState } from "@shared/contracts";
 import { cn } from "../lib/utils";
-import { useUiStore } from "../store/ui-store";
 import type { DocumentNodeData } from "./document-node";
 import { Button } from "./ui/button";
 
@@ -19,8 +18,7 @@ const statusLabel: Readonly<Record<CanvasNode["status"], string>> = {
 };
 
 export function StoryboardImageNode({ data, selected }: NodeProps<StoryboardImageFlowNode>): React.JSX.Element {
-  const { meta, projectRoot, canvasNodes, onProjectChanged } = data;
-  const selectedNodeIds = useUiStore((state) => state.selectedNodeIds);
+  const { meta, projectRoot, onProjectChanged } = data;
   const [imageState, setImageState] = useState<StoryboardImageState | null>(null);
   const [prompt, setPrompt] = useState("");
   const [loadError, setLoadError] = useState("");
@@ -81,20 +79,12 @@ export function StoryboardImageNode({ data, selected }: NodeProps<StoryboardImag
 
   const applyToScript = async (): Promise<void> => {
     if (busy || !imageState?.selectedVersionId) return;
-    const selectedScripts = canvasNodes.filter(
-      (node) => node.kind === "script" && selectedNodeIds.includes(node.id)
-    );
-    if (selectedScripts.length > 1) {
-      setMessage("只能选择一个脚本节点作为新版本基础。");
-      return;
-    }
     setBusy("apply");
     setMessage("");
     try {
       const reply = await window.agentApp.agent.applyStoryboardImage({
         projectRoot,
-        nodeId: meta.id,
-        ...(selectedScripts[0] ? { baseScriptNodeId: selectedScripts[0].id } : {})
+        nodeId: meta.id
       });
       setMessage(reply.text);
       await onProjectChanged();
