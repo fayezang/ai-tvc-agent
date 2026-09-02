@@ -74,19 +74,17 @@ describe("migration readiness", () => {
 
   test("removes the Next.js legacy tree from the repository", () => {
     // 这些目录不在 Electron 运行路径上，保留会污染代码搜索，
-    // 并使新接手者误判本项目使用了 CutAgent。
+    // 并使新接手者误判本项目仍包含旧 Web 运行路径。
     for (const path of ["src/app", "src/components", "src/lib", "src/types", "supabase"]) {
       expect(existsSync(rootUrl(path)), path).toBe(false);
     }
   });
 
-  test("records the video backend decision so CutAgent needs no pinned commit", () => {
+  test("records the current ORZ generation boundary", () => {
     const decision = readFileSync(rootUrl("docs/decisions/0001-video-backend.md"), "utf8");
-    expect(decision).toContain("不需要锁定 CutAgent commit");
-    // ffmpeg 命令序列是 CutAgent 唯一被移植的内容，必须完整留存，
-    // 否则删除旧代码后第四批导出功能将失去依据。
-    expect(decision).toContain("force_original_aspect_ratio=decrease");
-    expect(decision).toContain("amix=inputs=2:duration=first");
+    expect(decision).toContain("Generation uses the ORZ gateway");
+    expect(decision).toContain("one exact-duration task");
+    expect(decision).toContain("does not concatenate or transcode shots");
   });
 
   test("records why project entry points are fixed at two", () => {

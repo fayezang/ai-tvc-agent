@@ -156,7 +156,7 @@ export function ProviderSettings(): React.JSX.Element {
       <DialogContent className="max-h-[88vh] w-[min(94vw,760px)] overflow-hidden">
         <DialogTitle>模型与 API</DialogTitle>
         <DialogDescription>
-          类似 CutAgent 的统一模型设置：只配置一次 ORZ Key，再为文本、图片和不同镜头角色选择默认模型。
+          统一模型设置：只配置一次 ORZ Key，再为文本、图片和不同镜头角色选择默认模型。
         </DialogDescription>
 
         <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--canvas)]/45 px-3 py-2">

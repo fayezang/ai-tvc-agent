@@ -32,8 +32,8 @@ export interface DownloadedVideo {
  * 结构：前 4 字节是 box 大小（大端），紧接着 4 字节 box 类型。
  * 有效文件的第一个 box 类型为 "ftyp"，即偏移 4-8 处为 66 74 79 70。
  *
- * 这是轻量校验，用于拦截网关返回 HTML 错误页、空响应或截断内容的情况。
- * 完整的流完整性校验需要 ffprobe，属于导出功能的范围，本模块不引入。
+ * 这是轻量校验，用于拦截网关返回 HTML 错误页、空响应或明显截断内容的情况。
+ * 更深入的编码与播放完整性检查不属于当前下载验证范围。
  */
 export const isIsoBaseMediaFile = (bytes: Uint8Array): boolean => {
   if (bytes.byteLength < 12) return false;
